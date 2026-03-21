@@ -1,0 +1,21 @@
+{
+  "name": "agency-crm",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Digital agency CRM monorepo",
+  "packageManager": "npm@11.9.0",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:web": "npm run dev --workspace @agency-crm/web",
+    "dev:api": "npm run dev --workspace @agency-crm/api",
+    "build": "npm run build --workspaces --if-present",
+    "lint": "npm run lint --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present"
+  },
+  "engines": {
+    "node": "24.14.0"
+  }
+}

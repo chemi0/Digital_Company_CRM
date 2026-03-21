@@ -1,0 +1,17 @@
+node_modules/
+dist/
+coverage/
+.env
+.env.*
+!.env.example
+.DS_Store
+Thumbs.db
+.vscode/
+apps/web/node_modules/
+apps/web/dist/
+apps/api/node_modules/
+apps/api/dist/
+packages/shared/node_modules/
+packages/shared/dist/
+apps/api/prisma/dev.db
+apps/api/prisma/dev.db-journal

@@ -1,0 +1,115 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum MembershipRole {
+  ADMIN
+  MANAGER
+  SALES_REP
+}
+
+enum CompanyStatus {
+  LEAD
+  ACTIVE_CLIENT
+  INACTIVE
+}
+
+model Organization {
+  id          String       @id @default(cuid())
+  name        String
+  slug        String       @unique
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+  archivedAt  DateTime?
+  memberships Membership[]
+  invitations Invitation[]
+  companies   Company[]
+  contacts    Contact[]
+}
+
+model User {
+  id              String       @id @default(cuid())
+  email           String       @unique
+  passwordHash    String
+  firstName       String
+  lastName        String
+  isActive        Boolean      @default(true)
+  lastLoginAt     DateTime?
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+  archivedAt      DateTime?
+  memberships     Membership[]
+  sentInvitations Invitation[] @relation("InvitationInviter")
+}
+
+model Membership {
+  id             String         @id @default(cuid())
+  organizationId String
+  userId         String
+  role           MembershipRole
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+  archivedAt     DateTime?
+  organization   Organization   @relation(fields: [organizationId], references: [id])
+  user           User           @relation(fields: [userId], references: [id])
+
+  @@unique([organizationId, userId])
+}
+
+model Invitation {
+  id              String         @id @default(cuid())
+  organizationId  String
+  email           String
+  role            MembershipRole
+  tokenHash       String         @unique
+  invitedByUserId String
+  expiresAt       DateTime
+  acceptedAt      DateTime?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+  organization    Organization   @relation(fields: [organizationId], references: [id])
+  invitedByUser   User           @relation("InvitationInviter", fields: [invitedByUserId], references: [id])
+}
+
+model Company {
+  id             String        @id @default(cuid())
+  organizationId String
+  name           String
+  status         CompanyStatus
+  website        String?
+  industry       String?
+  phone          String?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+  archivedAt     DateTime?
+  organization   Organization  @relation(fields: [organizationId], references: [id])
+  contacts       Contact[]
+
+  @@unique([organizationId, name])
+  @@index([organizationId])
+}
+
+model Contact {
+  id             String       @id @default(cuid())
+  organizationId String
+  companyId      String
+  firstName      String
+  lastName       String
+  email          String?
+  phone          String?
+  jobTitle       String?
+  isPrimary      Boolean      @default(false)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  archivedAt     DateTime?
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  company        Company      @relation(fields: [companyId], references: [id])
+
+  @@index([organizationId])
+  @@index([companyId])
+}

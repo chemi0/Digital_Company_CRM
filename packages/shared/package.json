@@ -1,0 +1,16 @@
+{
+  "name": "@agency-crm/shared",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Shared types and utilities for the agency CRM",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "echo \"Shared package tests will be added in the next step\""
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3"
+  }
+}
