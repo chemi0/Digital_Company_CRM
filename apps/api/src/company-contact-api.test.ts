@@ -1,12 +1,17 @@
+import bcrypt from "bcrypt";
 import { randomUUID } from "node:crypto";
 import request from "supertest";
-import { afterAll, beforeAll, describe, expect, test } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, test } from "vitest";
 import { createApp } from "./app.js";
 import { prisma } from "./lib/prisma.js";
 
 const app = createApp();
 const testOrgSlug = "api-test-org";
 const baseCompanyName = "API Test Company";
+const testUserEmail = "api-test-admin@example.com";
+const testPassword = "ApiAdmin123!";
+
+let authenticatedAgent: ReturnType<typeof request.agent>;
 
 async function ensureTestOrganization() {
   return prisma.organization.upsert({
@@ -47,6 +52,43 @@ async function ensureBaseCompany() {
 beforeAll(async () => {
   const organization = await ensureTestOrganization();
   const company = await ensureBaseCompany();
+  const passwordHash = await bcrypt.hash(testPassword, 10);
+
+  const user = await prisma.user.upsert({
+    where: { email: testUserEmail },
+    update: {
+      passwordHash,
+      firstName: "API",
+      lastName: "Admin",
+      isActive: true,
+      archivedAt: null,
+    },
+    create: {
+      email: testUserEmail,
+      passwordHash,
+      firstName: "API",
+      lastName: "Admin",
+      isActive: true,
+    },
+  });
+
+  await prisma.membership.upsert({
+    where: {
+      organizationId_userId: {
+        organizationId: organization.id,
+        userId: user.id,
+      },
+    },
+    update: {
+      role: "ADMIN",
+      archivedAt: null,
+    },
+    create: {
+      organizationId: organization.id,
+      userId: user.id,
+      role: "ADMIN",
+    },
+  });
 
   await prisma.contact.deleteMany({
     where: {
@@ -68,6 +110,19 @@ beforeAll(async () => {
   });
 });
 
+beforeEach(async () => {
+  authenticatedAgent = request.agent(app);
+
+  const loginResponse = await authenticatedAgent
+    .post("/api/auth/login")
+    .send({
+      email: testUserEmail,
+      password: testPassword,
+    });
+
+  expect(loginResponse.status).toBe(200);
+});
+
 afterAll(async () => {
   const organization = await prisma.organization.findUnique({
     where: { slug: testOrgSlug },
@@ -81,6 +136,10 @@ afterAll(async () => {
     where: { organizationId: organization.id },
   });
 
+  await prisma.membership.deleteMany({
+    where: { organizationId: organization.id },
+  });
+
   await prisma.company.deleteMany({
     where: { organizationId: organization.id },
   });
@@ -88,11 +147,31 @@ afterAll(async () => {
   await prisma.organization.deleteMany({
     where: { id: organization.id },
   });
+
+  await prisma.authSession.deleteMany({
+    where: {
+      user: {
+        email: testUserEmail,
+      },
+    },
+  });
+
+  await prisma.user.deleteMany({
+    where: { email: testUserEmail },
+  });
 });
 
 describe("company/contact API", () => {
-  test("lists companies for an organization", async () => {
+  test("rejects unauthenticated company access", async () => {
     const response = await request(app).get(
+      `/api/organizations/${testOrgSlug}/companies`,
+    );
+
+    expect(response.status).toBe(401);
+  });
+
+  test("lists companies for an organization", async () => {
+    const response = await authenticatedAgent.get(
       `/api/organizations/${testOrgSlug}/companies`,
     );
 
@@ -107,7 +186,7 @@ describe("company/contact API", () => {
   });
 
   test("lists contacts for an organization", async () => {
-    const response = await request(app).get(
+    const response = await authenticatedAgent.get(
       `/api/organizations/${testOrgSlug}/contacts`,
     );
 
@@ -124,7 +203,7 @@ describe("company/contact API", () => {
   test("creates a company for an organization", async () => {
     const companyName = `Created Via API ${randomUUID()}`;
 
-    const response = await request(app)
+    const response = await authenticatedAgent
       .post(`/api/organizations/${testOrgSlug}/companies`)
       .send({
         name: companyName,
@@ -145,7 +224,7 @@ describe("company/contact API", () => {
     const company = await ensureBaseCompany();
     const email = `${randomUUID()}@example.com`;
 
-    const response = await request(app)
+    const response = await authenticatedAgent
       .post(`/api/organizations/${testOrgSlug}/contacts`)
       .send({
         companyId: company.id,
@@ -168,7 +247,7 @@ describe("company/contact API", () => {
   test("gets a company detail with its contacts", async () => {
     const company = await ensureBaseCompany();
 
-    const response = await request(app).get(
+    const response = await authenticatedAgent.get(
       `/api/organizations/${testOrgSlug}/companies/${company.id}`,
     );
 
@@ -191,7 +270,7 @@ describe("company/contact API", () => {
   test("updates a company for an organization", async () => {
     const company = await ensureBaseCompany();
 
-    const response = await request(app)
+    const response = await authenticatedAgent
       .patch(`/api/organizations/${testOrgSlug}/companies/${company.id}`)
       .send({
         status: "active_client",
@@ -215,7 +294,7 @@ describe("company/contact API", () => {
       },
     });
 
-    const response = await request(app).get(
+    const response = await authenticatedAgent.get(
       `/api/organizations/${testOrgSlug}/contacts/${contact.id}`,
     );
 
@@ -240,7 +319,7 @@ describe("company/contact API", () => {
       },
     });
 
-    const response = await request(app)
+    const response = await authenticatedAgent
       .patch(`/api/organizations/${testOrgSlug}/contacts/${contact.id}`)
       .send({
         jobTitle: "Head of QA",
@@ -271,7 +350,7 @@ describe("company/contact API", () => {
       },
     });
 
-    const archiveResponse = await request(app).delete(
+    const archiveResponse = await authenticatedAgent.delete(
       `/api/organizations/${testOrgSlug}/contacts/${createdContact.id}`,
     );
 
@@ -283,7 +362,7 @@ describe("company/contact API", () => {
       }),
     );
 
-    const listResponse = await request(app).get(
+    const listResponse = await authenticatedAgent.get(
       `/api/organizations/${testOrgSlug}/contacts`,
     );
 

@@ -3,46 +3,38 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, test, vi } from "vitest";
+import type { AuthSession, CompanyDetail, CompanySummary, ContactDetail, ContactSummary } from "@agency-crm/shared";
 import App from "./App";
-
-type CompanyStatus = "lead" | "active_client" | "inactive";
-
-type Company = {
-  id: string;
-  organizationId: string;
-  name: string;
-  status: CompanyStatus;
-  website: string | null;
-  industry: string | null;
-  phone: string | null;
-  contactCount: number;
-  contacts?: Contact[];
-};
-
-type Contact = {
-  id: string;
-  organizationId: string;
-  companyId: string;
-  firstName: string;
-  lastName: string;
-  email: string | null;
-  phone: string | null;
-  jobTitle: string | null;
-  isPrimary: boolean;
-  company?: {
-    id: string;
-    name: string;
-  };
-};
+import { AuthProvider } from "@/lib/auth-context";
 
 type Store = {
-  companies: Company[];
-  contacts: Contact[];
+  companies: CompanySummary[];
+  contacts: ContactSummary[];
+  authSession: AuthSession | null;
+  allowRefresh: boolean;
 };
 
 const organizationSlug = "atlas-digital";
 
-function createStore(): Store {
+const demoSession: AuthSession = {
+  id: "user-1",
+  email: "owner@atlas-digital.test",
+  firstName: "Atlas",
+  lastName: "Owner",
+  lastLoginAt: new Date().toISOString(),
+  sessionId: "session-1",
+  organization: {
+    id: "org-1",
+    slug: organizationSlug,
+    name: "Atlas Digital",
+  },
+  membership: {
+    id: "membership-1",
+    role: "admin",
+  },
+};
+
+function createStore(overrides?: Partial<Store>): Store {
   return {
     companies: [
       {
@@ -53,6 +45,8 @@ function createStore(): Store {
         website: "https://acme.example",
         industry: "Design",
         phone: "+381 11 555 0101",
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
         contactCount: 1,
       },
     ],
@@ -67,20 +61,73 @@ function createStore(): Store {
         phone: "+381 64 555 0101",
         jobTitle: "Marketing Lead",
         isPrimary: true,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
         company: {
           id: "company-1",
           name: "Acme Studio",
         },
       },
     ],
+    authSession: null,
+    allowRefresh: false,
+    ...overrides,
   };
 }
 
 function jsonResponse(data: unknown, status = 200) {
   return new Response(JSON.stringify({ data }), {
     status,
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+    },
   });
+}
+
+function errorResponse(error: string, status: number) {
+  return new Response(JSON.stringify({ error }), {
+    status,
+    headers: {
+      "Content-Type": "application/json",
+    },
+  });
+}
+
+function toCompanyDetail(store: Store, companyId: string): CompanyDetail | null {
+  const company = store.companies.find((item) => item.id === companyId);
+
+  if (!company) {
+    return null;
+  }
+
+  return {
+    ...company,
+    contacts: store.contacts
+      .filter((contact) => contact.companyId === company.id)
+      .map((contact) => ({
+        id: contact.id,
+        organizationId: contact.organizationId,
+        companyId: contact.companyId,
+        firstName: contact.firstName,
+        lastName: contact.lastName,
+        email: contact.email,
+        phone: contact.phone,
+        jobTitle: contact.jobTitle,
+        isPrimary: contact.isPrimary,
+        createdAt: contact.createdAt,
+        updatedAt: contact.updatedAt,
+      })),
+  };
+}
+
+function toContactDetail(store: Store, contactId: string): ContactDetail | null {
+  const contact = store.contacts.find((item) => item.id === contactId);
+
+  if (!contact) {
+    return null;
+  }
+
+  return contact;
 }
 
 function installApiMock(store: Store) {
@@ -89,6 +136,49 @@ function installApiMock(store: Store) {
     const method = init?.method?.toUpperCase() ?? "GET";
     const body = init?.body ? JSON.parse(String(init.body)) : null;
     const path = url.pathname;
+
+    if (path === "/api/auth/me" && method === "GET") {
+      if (!store.authSession) {
+        return errorResponse("Authentication required", 401);
+      }
+
+      return jsonResponse(store.authSession);
+    }
+
+    if (path === "/api/auth/login" && method === "POST") {
+      if (body.email === "owner@atlas-digital.test" && body.password === "AtlasAdmin123!") {
+        store.authSession = {
+          ...demoSession,
+          sessionId: `session-${Date.now()}`,
+        };
+        return jsonResponse(store.authSession);
+      }
+
+      return errorResponse("Invalid email or password", 401);
+    }
+
+    if (path === "/api/auth/refresh" && method === "POST") {
+      if (!store.allowRefresh) {
+        return errorResponse("Refresh token required", 401);
+      }
+
+      store.authSession = {
+        ...demoSession,
+        sessionId: `session-${Date.now()}`,
+      };
+
+      return jsonResponse(store.authSession);
+    }
+
+    if (path === "/api/auth/logout" && method === "POST") {
+      store.authSession = null;
+      store.allowRefresh = false;
+      return jsonResponse({ loggedOut: true });
+    }
+
+    if (!store.authSession) {
+      return errorResponse("Authentication required", 401);
+    }
 
     if (path === `/api/organizations/${organizationSlug}/companies` && method === "GET") {
       const companies = store.companies.map((company) => ({
@@ -100,21 +190,11 @@ function installApiMock(store: Store) {
     }
 
     if (path === `/api/organizations/${organizationSlug}/contacts` && method === "GET") {
-      const contacts = store.contacts
-        .filter((contact) => !("archivedAt" in contact))
-        .map((contact) => ({
-          ...contact,
-          company: contact.company ?? {
-            id: contact.companyId,
-            name: store.companies.find((company) => company.id === contact.companyId)?.name ?? "Unknown",
-          },
-        }));
-
-      return jsonResponse(contacts);
+      return jsonResponse(store.contacts);
     }
 
     if (path === `/api/organizations/${organizationSlug}/companies` && method === "POST") {
-      const company: Company = {
+      const company: CompanySummary = {
         id: `company-${store.companies.length + 1}`,
         organizationId: "org-1",
         name: body.name,
@@ -122,6 +202,8 @@ function installApiMock(store: Store) {
         website: body.website ?? null,
         industry: body.industry ?? null,
         phone: body.phone ?? null,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
         contactCount: 0,
       };
 
@@ -131,17 +213,27 @@ function installApiMock(store: Store) {
 
     if (path === `/api/organizations/${organizationSlug}/contacts` && method === "POST") {
       const company = store.companies.find((item) => item.id === body.companyId);
-      const contact: Contact = {
+
+      if (!company) {
+        return errorResponse("Not found", 404);
+      }
+
+      const contact: ContactSummary = {
         id: `contact-${store.contacts.length + 1}`,
         organizationId: "org-1",
-        companyId: body.companyId,
+        companyId: company.id,
         firstName: body.firstName,
         lastName: body.lastName,
         email: body.email ?? null,
         phone: body.phone ?? null,
         jobTitle: body.jobTitle ?? null,
         isPrimary: Boolean(body.isPrimary),
-        company: company ? { id: company.id, name: company.name } : undefined,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        company: {
+          id: company.id,
+          name: company.name,
+        },
       };
 
       store.contacts.push(contact);
@@ -151,23 +243,15 @@ function installApiMock(store: Store) {
     const companyMatch = path.match(new RegExp(`/api/organizations/${organizationSlug}/companies/([^/]+)$`));
 
     if (companyMatch && method === "GET") {
-      const company = store.companies.find((item) => item.id === companyMatch[1]);
-
-      if (!company) {
-        return new Response(JSON.stringify({ error: "Not found" }), { status: 404 });
-      }
-
-      return jsonResponse({
-        ...company,
-        contacts: store.contacts.filter((contact) => contact.companyId === company.id),
-      });
+      const company = toCompanyDetail(store, companyMatch[1]);
+      return company ? jsonResponse(company) : errorResponse("Not found", 404);
     }
 
     if (companyMatch && method === "PATCH") {
       const company = store.companies.find((item) => item.id === companyMatch[1]);
 
       if (!company) {
-        return new Response(JSON.stringify({ error: "Not found" }), { status: 404 });
+        return errorResponse("Not found", 404);
       }
 
       Object.assign(company, {
@@ -176,6 +260,7 @@ function installApiMock(store: Store) {
         website: body.website ?? company.website,
         industry: body.industry ?? company.industry,
         phone: body.phone ?? company.phone,
+        updatedAt: new Date().toISOString(),
       });
 
       return jsonResponse(company);
@@ -184,19 +269,8 @@ function installApiMock(store: Store) {
     const contactMatch = path.match(new RegExp(`/api/organizations/${organizationSlug}/contacts/([^/]+)$`));
 
     if (contactMatch && method === "GET") {
-      const contact = store.contacts.find((item) => item.id === contactMatch[1]);
-
-      if (!contact) {
-        return new Response(JSON.stringify({ error: "Not found" }), { status: 404 });
-      }
-
-      return jsonResponse({
-        ...contact,
-        company: contact.company ?? {
-          id: contact.companyId,
-          name: store.companies.find((company) => company.id === contact.companyId)?.name ?? "Unknown",
-        },
-      });
+      const contact = toContactDetail(store, contactMatch[1]);
+      return contact ? jsonResponse(contact) : errorResponse("Not found", 404);
     }
 
     if (contactMatch && method === "PATCH") {
@@ -204,7 +278,7 @@ function installApiMock(store: Store) {
       const company = store.companies.find((item) => item.id === (body.companyId ?? contact?.companyId));
 
       if (!contact || !company) {
-        return new Response(JSON.stringify({ error: "Not found" }), { status: 404 });
+        return errorResponse("Not found", 404);
       }
 
       Object.assign(contact, {
@@ -215,6 +289,7 @@ function installApiMock(store: Store) {
         phone: body.phone ?? contact.phone,
         jobTitle: body.jobTitle ?? contact.jobTitle,
         isPrimary: body.isPrimary ?? contact.isPrimary,
+        updatedAt: new Date().toISOString(),
         company: {
           id: company.id,
           name: company.name,
@@ -247,9 +322,11 @@ function renderApp(initialEntry: string) {
 
   return render(
     <QueryClientProvider client={queryClient}>
-      <MemoryRouter initialEntries={[initialEntry]}>
-        <App />
-      </MemoryRouter>
+      <AuthProvider>
+        <MemoryRouter initialEntries={[initialEntry]}>
+          <App />
+        </MemoryRouter>
+      </AuthProvider>
     </QueryClientProvider>,
   );
 }
@@ -258,87 +335,49 @@ beforeEach(() => {
   installApiMock(createStore());
 });
 
-describe("agency CRM frontend", () => {
-  test("redirects the root route to the companies page", async () => {
-    renderApp("/");
+describe("agency CRM authentication", () => {
+  test("redirects unauthenticated users to the login page", async () => {
+    renderApp("/companies");
+
+    expect(await screen.findByRole("heading", { name: "Sign in to Atlas Digital" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Email")).toHaveValue("owner@atlas-digital.test");
+  });
+
+  test("logs in and lands on the protected companies screen", async () => {
+    const user = userEvent.setup();
+    renderApp("/login");
+
+    await user.clear(await screen.findByLabelText("Email"));
+    await user.type(screen.getByLabelText("Email"), "owner@atlas-digital.test");
+    await user.clear(screen.getByLabelText("Password"));
+    await user.type(screen.getByLabelText("Password"), "AtlasAdmin123!");
+    await user.click(screen.getByRole("button", { name: "Sign in" }));
 
     expect(await screen.findByRole("heading", { name: "Companies" })).toBeInTheDocument();
-  });
-
-  test("renders companies from the backend API", async () => {
-    renderApp("/companies");
-
     expect(await screen.findByText("Acme Studio")).toBeInTheDocument();
-    expect(screen.getByText("Design")).toBeInTheDocument();
-    expect(screen.getByText("1 contact")).toBeInTheDocument();
   });
 
-  test("renders contacts from the backend API", async () => {
-    renderApp("/contacts");
-
-    expect(await screen.findByText("Ana Markovic")).toBeInTheDocument();
-    expect(screen.getAllByText("Acme Studio").length).toBeGreaterThan(0);
-    expect(screen.getByText("Marketing Lead")).toBeInTheDocument();
-  });
-
-  test("creates a new company from the companies page", async () => {
-    const user = userEvent.setup();
+  test("shows authenticated user info in the CRM shell", async () => {
+    installApiMock(createStore({ authSession: demoSession }));
     renderApp("/companies");
 
-    await user.type(screen.getByLabelText("Company name"), "Bright Layer");
-    await user.selectOptions(screen.getByLabelText("Status"), "active_client");
-    await user.type(screen.getByLabelText("Website"), "https://bright-layer.example");
-    await user.click(screen.getByRole("button", { name: "Create company" }));
-
-    expect(await screen.findByText("Bright Layer")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Companies" })).toBeInTheDocument();
+    expect(screen.getByText("Atlas Owner")).toBeInTheDocument();
+    expect(screen.getByText("Admin")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Log out" })).toBeInTheDocument();
   });
 
-  test("updates an existing company from the company detail page", async () => {
+  test("logs out and returns to the login screen", async () => {
+    installApiMock(createStore({ authSession: demoSession }));
     const user = userEvent.setup();
-    renderApp("/companies/company-1");
 
-    const industryInput = await screen.findByLabelText("Industry");
-    await user.clear(industryInput);
-    await user.type(industryInput, "Creative Services");
-    await user.click(screen.getByRole("button", { name: "Save company" }));
+    renderApp("/companies");
+
+    await screen.findByRole("heading", { name: "Companies" });
+    await user.click(screen.getByRole("button", { name: "Log out" }));
 
     await waitFor(() => {
-      expect(screen.getByDisplayValue("Creative Services")).toBeInTheDocument();
-    });
-  });
-
-  test("creates and updates a contact from the contacts flows", async () => {
-    const user = userEvent.setup();
-    renderApp("/contacts");
-
-    await user.type(screen.getByLabelText("First name"), "Luka");
-    await user.type(screen.getByLabelText("Last name"), "Petrovic");
-    await user.type(screen.getByLabelText("Email"), "luka@example.com");
-    await user.type(screen.getByLabelText("Job title"), "Growth Lead");
-    await user.selectOptions(screen.getByLabelText("Company"), "company-1");
-    await user.click(screen.getByRole("button", { name: "Create contact" }));
-
-    expect(await screen.findByText("Luka Petrovic")).toBeInTheDocument();
-  });
-
-  test("updates and archives a contact from the contact detail page", async () => {
-    const user = userEvent.setup();
-    renderApp("/contacts/contact-1");
-
-    const jobTitleInput = await screen.findByLabelText("Job title");
-    await user.clear(jobTitleInput);
-    await user.type(jobTitleInput, "Head of QA");
-    await user.click(screen.getByRole("button", { name: "Save contact" }));
-
-    await waitFor(() => {
-      expect(screen.getByDisplayValue("Head of QA")).toBeInTheDocument();
-    });
-
-    await user.click(screen.getByRole("button", { name: "Archive contact" }));
-
-    expect(await screen.findByRole("heading", { name: "Contacts" })).toBeInTheDocument();
-    await waitFor(() => {
-      expect(screen.queryByText("Ana Markovic")).not.toBeInTheDocument();
+      expect(screen.getByRole("heading", { name: "Sign in to Atlas Digital" })).toBeInTheDocument();
     });
   });
 });

@@ -21,5 +21,7 @@ describe("env loading", () => {
     expect(module.env.DATABASE_URL).toContain("agency_crm");
     expect(module.env.PORT).toBe(4000);
     expect(module.env.CLIENT_URL).toBe("http://localhost:5173");
+    expect(module.env.JWT_ACCESS_SECRET.length).toBeGreaterThanOrEqual(32);
+    expect(module.env.JWT_REFRESH_SECRET.length).toBeGreaterThanOrEqual(32);
   });
 });
