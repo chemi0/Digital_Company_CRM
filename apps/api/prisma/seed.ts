@@ -1,9 +1,13 @@
 import "dotenv/config";
+import bcrypt from "bcrypt";
 import { createPrismaClient } from "../src/lib/prisma.js";
 
 const prisma = createPrismaClient();
+const demoAdminPassword = "AtlasAdmin123!";
 
 async function main() {
+  const passwordHash = await bcrypt.hash(demoAdminPassword, 10);
+
   const organization = await prisma.organization.upsert({
     where: { slug: "atlas-digital" },
     update: {
@@ -19,6 +23,7 @@ async function main() {
   const adminUser = await prisma.user.upsert({
     where: { email: "owner@atlas-digital.test" },
     update: {
+      passwordHash,
       firstName: "Milan",
       lastName: "Owner",
       isActive: true,
@@ -26,7 +31,7 @@ async function main() {
     },
     create: {
       email: "owner@atlas-digital.test",
-      passwordHash: "dev-seed-placeholder-hash",
+      passwordHash,
       firstName: "Milan",
       lastName: "Owner",
       isActive: true,
@@ -133,6 +138,10 @@ async function main() {
 
   console.log({
     seeded: true,
+    demoCredentials: {
+      email: "owner@atlas-digital.test",
+      password: demoAdminPassword,
+    },
     counts: {
       organizations,
       users,

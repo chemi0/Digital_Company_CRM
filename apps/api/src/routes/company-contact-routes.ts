@@ -2,8 +2,11 @@ import { Router } from "express";
 import { Prisma } from "../generated/prisma/client.js";
 import { prisma } from "../lib/prisma.js";
 import { z } from "zod";
+import { requireAuth, requireOrganizationAccess } from "../middleware/auth.js";
 
 const router = Router();
+
+router.use("/api/organizations/:organizationSlug", requireAuth, requireOrganizationAccess);
 
 const companyStatusSchema = z.enum(["lead", "active_client", "inactive"]);
 

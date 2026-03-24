@@ -1,7 +1,8 @@
-import { BriefcaseBusiness, Building2, ChevronLeft, Menu, Users } from "lucide-react";
+import { BriefcaseBusiness, Building2, ChevronLeft, LogOut, Menu, Users } from "lucide-react";
 import type { PropsWithChildren, ReactNode } from "react";
 import { NavLink } from "react-router-dom";
 import { Button } from "@/components/ui/button";
+import { useAuth } from "@/lib/auth-context";
 import { cn } from "@/lib/utils";
 
 type CrmShellProps = PropsWithChildren<{
@@ -26,6 +27,8 @@ const navItems = [
 ];
 
 export function CrmShell({ title, eyebrow, backTo, backLabel, actions, children }: CrmShellProps) {
+  const { logout, isLoggingOut, session } = useAuth();
+
   return (
     <div className="min-h-screen bg-[radial-gradient(circle_at_top_left,_rgba(255,255,255,0.95),_rgba(250,247,242,1)_45%,_rgba(243,238,229,1)_100%)] text-slate-900">
       <div className="mx-auto flex min-h-screen w-full max-w-[1600px] flex-col md:flex-row">
@@ -61,6 +64,27 @@ export function CrmShell({ title, eyebrow, backTo, backLabel, actions, children 
               </NavLink>
             ))}
           </nav>
+
+          {session ? (
+            <div className="mt-8 rounded-[24px] border border-slate-200 bg-slate-50 p-4">
+              <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Signed in</p>
+              <p className="mt-3 text-sm font-semibold text-slate-950">
+                {session.firstName} {session.lastName}
+              </p>
+              <p className="text-sm text-slate-500">{formatRole(session.membership.role)}</p>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="mt-4 w-full justify-center"
+                onClick={() => logout()}
+                disabled={isLoggingOut}
+              >
+                <LogOut className="size-4" />
+                Log out
+              </Button>
+            </div>
+          ) : null}
         </aside>
 
         <main className="flex-1 px-4 py-5 md:px-8 md:py-8">
@@ -96,6 +120,17 @@ export function CrmShell({ title, eyebrow, backTo, backLabel, actions, children 
       </div>
     </div>
   );
+}
+
+function formatRole(role: "admin" | "manager" | "sales_rep") {
+  switch (role) {
+    case "admin":
+      return "Admin";
+    case "manager":
+      return "Manager";
+    case "sales_rep":
+      return "Sales rep";
+  }
 }
 
 export function SectionCard({

@@ -5,22 +5,28 @@ import type {
   ContactCompany,
   ContactFormValues,
   ContactSummary,
+  LoginCredentials,
 } from "@agency-crm/shared";
 import type { ReactNode } from "react";
+import { useState } from "react";
 import {
   Building2,
   Globe,
   Mail,
   Phone,
+  ShieldCheck,
   Sparkles,
   UserRoundCheck,
   Users,
 } from "lucide-react";
-import { Navigate, Link, Route, Routes, useNavigate, useParams } from "react-router-dom";
+import { Link, Navigate, Outlet, Route, Routes, useLocation, useNavigate, useParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { CompanyForm } from "@/components/company-form";
 import { ContactForm } from "@/components/contact-form";
 import { CrmShell, SectionCard } from "@/components/crm-shell";
+import { LoginForm } from "@/components/login-form";
+import { ApiError } from "@/lib/api-client";
+import { useAuth } from "@/lib/auth-context";
 import {
   archiveContact,
   createCompany,
@@ -41,16 +47,127 @@ const queryKeys = {
   contact: (contactId: string) => ["contact", contactId] as const,
 };
 
+const demoCredentials: LoginCredentials | undefined = import.meta.env.DEV
+  ? {
+      email: "owner@atlas-digital.test",
+      password: "AtlasAdmin123!",
+    }
+  : undefined;
+
 function App() {
   return (
     <Routes>
-      <Route path="/" element={<Navigate to="/companies" replace />} />
-      <Route path="/companies" element={<CompaniesPage />} />
-      <Route path="/companies/:companyId" element={<CompanyDetailPage />} />
-      <Route path="/contacts" element={<ContactsPage />} />
-      <Route path="/contacts/:contactId" element={<ContactDetailPage />} />
+      <Route path="/login" element={<LoginPage />} />
+      <Route element={<ProtectedRoute />}>
+        <Route path="/" element={<Navigate to="/companies" replace />} />
+        <Route path="/companies" element={<CompaniesPage />} />
+        <Route path="/companies/:companyId" element={<CompanyDetailPage />} />
+        <Route path="/contacts" element={<ContactsPage />} />
+        <Route path="/contacts/:contactId" element={<ContactDetailPage />} />
+      </Route>
+      <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );
+}
+
+function LoginPage() {
+  const navigate = useNavigate();
+  const location = useLocation();
+  const { isAuthenticated, isLoading, isLoggingIn, login } = useAuth();
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const nextPath = typeof (location.state as { from?: string } | null)?.from === "string"
+    ? (location.state as { from: string }).from
+    : "/companies";
+
+  if (isLoading) {
+    return <FullPageState title="Checking your session" description="Restoring your CRM access from secure cookies." />;
+  }
+
+  if (isAuthenticated) {
+    return <Navigate to={nextPath} replace />;
+  }
+
+  async function handleSubmit(values: LoginCredentials) {
+    setErrorMessage(null);
+
+    try {
+      await login(values);
+      navigate(nextPath, { replace: true });
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 401) {
+        setErrorMessage("The email or password is incorrect.");
+        return;
+      }
+
+      setErrorMessage(error instanceof Error ? error.message : "Unable to sign in right now.");
+    }
+  }
+
+  return (
+    <div className="min-h-screen bg-[radial-gradient(circle_at_top_left,_rgba(255,255,255,0.95),_rgba(250,247,242,1)_45%,_rgba(243,238,229,1)_100%)] px-4 py-10 text-slate-900">
+      <div className="mx-auto grid min-h-[calc(100vh-5rem)] w-full max-w-6xl items-center gap-8 lg:grid-cols-[1.1fr_0.9fr]">
+        <section className="rounded-[32px] border border-white/70 bg-white/85 p-6 shadow-[0_24px_80px_-48px_rgba(15,23,42,0.45)] backdrop-blur md:p-8">
+          <div className="inline-flex items-center gap-3 rounded-full border border-slate-200 bg-slate-50 px-4 py-2 text-sm font-semibold text-slate-600">
+            <ShieldCheck className="size-4" />
+            Secure team access
+          </div>
+          <h1 className="mt-6 text-4xl font-semibold tracking-tight text-slate-950">Sign in to Atlas Digital</h1>
+          <p className="mt-4 max-w-xl text-base leading-7 text-slate-600">
+            Access the live CRM workspace for companies and contacts. This phase uses the seeded admin account and
+            secure cookie-based sessions backed by the API.
+          </p>
+
+          <div className="mt-8 grid gap-4 md:grid-cols-2">
+            <FeatureCard title="Protected API routes" description="Every company and contact request now requires an authenticated session." />
+            <FeatureCard title="Refresh-backed sessions" description="Short-lived access tokens are refreshed through a tracked server-side session." />
+            <FeatureCard title="Single-org workspace" description="The current app restores your Atlas Digital organization context after login." />
+            <FeatureCard title="Ready for Phase B2" description="This auth foundation sets us up for role-based rules and ownership checks next." />
+          </div>
+        </section>
+
+        <section className="rounded-[32px] border border-white/70 bg-white/90 p-6 shadow-[0_24px_80px_-48px_rgba(15,23,42,0.5)] backdrop-blur md:p-8">
+          <h2 className="text-2xl font-semibold text-slate-950">Welcome back</h2>
+          <p className="mt-2 text-sm text-slate-500">Use the demo admin credentials below while we keep building the full CRM.</p>
+
+          {import.meta.env.DEV && demoCredentials ? (
+            <div className="mt-5 rounded-[24px] border border-sky-200 bg-sky-50 px-5 py-4 text-sm text-sky-900">
+              <p className="font-semibold">Local demo credentials</p>
+              <p className="mt-2">Email: {demoCredentials.email}</p>
+              <p>Password: {demoCredentials.password}</p>
+            </div>
+          ) : null}
+
+          <div className="mt-6">
+            <LoginForm
+              initialValues={demoCredentials}
+              errorMessage={errorMessage}
+              isSubmitting={isLoggingIn}
+              onSubmit={handleSubmit}
+            />
+          </div>
+        </section>
+      </div>
+    </div>
+  );
+}
+
+function ProtectedRoute() {
+  const location = useLocation();
+  const { error, isAuthenticated, isLoading } = useAuth();
+
+  if (isLoading) {
+    return <FullPageState title="Loading workspace" description="Checking your authenticated CRM session." />;
+  }
+
+  if (error) {
+    return <FullPageState title="Unable to load session" description={error.message} />;
+  }
+
+  if (!isAuthenticated) {
+    return <Navigate to="/login" replace state={{ from: `${location.pathname}${location.search}` }} />;
+  }
+
+  return <Outlet />;
 }
 
 function CompaniesPage() {
@@ -467,7 +584,7 @@ function DataState({
   isLoading: boolean;
 }) {
   if (isLoading) {
-    return <p className="rounded-2xl border border-dashed border-slate-200 px-4 py-5 text-sm text-slate-500">Loading…</p>;
+    return <p className="rounded-2xl border border-dashed border-slate-200 px-4 py-5 text-sm text-slate-500">Loading...</p>;
   }
 
   if (error) {
@@ -479,6 +596,29 @@ function DataState({
   }
 
   return <>{children}</>;
+}
+
+function FeatureCard({ title, description }: { title: string; description: string }) {
+  return (
+    <div className="rounded-[24px] border border-slate-200 bg-slate-50 p-4">
+      <p className="font-semibold text-slate-900">{title}</p>
+      <p className="mt-2 text-sm leading-6 text-slate-600">{description}</p>
+    </div>
+  );
+}
+
+function FullPageState({ title, description }: { title: string; description: string }) {
+  return (
+    <div className="flex min-h-screen items-center justify-center bg-[radial-gradient(circle_at_top_left,_rgba(255,255,255,0.95),_rgba(250,247,242,1)_45%,_rgba(243,238,229,1)_100%)] px-4">
+      <div className="w-full max-w-xl rounded-[32px] border border-white/70 bg-white/90 p-8 text-center shadow-[0_24px_80px_-48px_rgba(15,23,42,0.5)] backdrop-blur">
+        <div className="mx-auto mb-5 flex size-12 items-center justify-center rounded-2xl bg-slate-900 text-white">
+          <ShieldCheck className="size-5" />
+        </div>
+        <h1 className="text-2xl font-semibold tracking-tight text-slate-950">{title}</h1>
+        <p className="mt-3 text-sm leading-6 text-slate-600">{description}</p>
+      </div>
+    </div>
+  );
 }
 
 function formatStatus(status: CompanySummary["status"]) {

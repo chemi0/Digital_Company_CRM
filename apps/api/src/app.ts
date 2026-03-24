@@ -2,6 +2,7 @@ import "dotenv/config";
 import cookieParser from "cookie-parser";
 import cors from "cors";
 import express from "express";
+import { authRouter } from "./routes/auth-routes.js";
 import { companyContactRouter } from "./routes/company-contact-routes.js";
 import { env } from "./lib/env.js";
 import { prisma } from "./lib/prisma.js";
@@ -17,6 +18,7 @@ export function createApp() {
   );
   app.use(cookieParser());
   app.use(express.json());
+  app.use(authRouter);
   app.use(companyContactRouter);
 
   app.get("/api/health", async (_request, response) => {
