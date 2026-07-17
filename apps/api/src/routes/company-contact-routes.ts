@@ -1,14 +1,16 @@
 import { Router } from "express";
 import { Prisma } from "../generated/prisma/client.js";
+import { toApiRole } from "../lib/auth-context.js";
 import { prisma } from "../lib/prisma.js";
+import { requireAuth, requireLeadershipRole, requireOrganizationAccess } from "../middleware/auth.js";
 import { z } from "zod";
-import { requireAuth, requireOrganizationAccess } from "../middleware/auth.js";
 
 const router = Router();
 
 router.use("/api/organizations/:organizationSlug", requireAuth, requireOrganizationAccess);
 
 const companyStatusSchema = z.enum(["lead", "active_client", "inactive"]);
+const membershipIdSchema = z.string().min(1);
 
 const createCompanySchema = z.object({
   name: z.string().trim().min(1),
@@ -16,6 +18,7 @@ const createCompanySchema = z.object({
   website: z.url().optional(),
   industry: z.string().trim().min(1).optional(),
   phone: z.string().trim().min(1).optional(),
+  ownerMembershipId: membershipIdSchema.optional(),
 });
 
 const createContactSchema = z.object({
@@ -30,17 +33,51 @@ const createContactSchema = z.object({
 
 const updateCompanySchema = createCompanySchema.partial().refine(
   (value) => Object.keys(value).length > 0,
-  {
-    message: "At least one company field must be provided",
-  },
+  { message: "At least one company field must be provided" },
 );
 
 const updateContactSchema = createContactSchema.partial().refine(
   (value) => Object.keys(value).length > 0,
-  {
-    message: "At least one contact field must be provided",
-  },
+  { message: "At least one contact field must be provided" },
 );
+
+const ownerSelect = {
+  id: true,
+  role: true,
+  user: {
+    select: {
+      id: true,
+      firstName: true,
+      lastName: true,
+      email: true,
+    },
+  },
+} as const;
+
+type OwnerMembership = {
+  id: string;
+  role: "ADMIN" | "MANAGER" | "SALES_REP";
+  user: {
+    id: string;
+    firstName: string;
+    lastName: string;
+    email: string;
+  };
+};
+
+type CompanyWithOwner = {
+  id: string;
+  organizationId: string;
+  ownerMembershipId: string;
+  name: string;
+  status: "LEAD" | "ACTIVE_CLIENT" | "INACTIVE";
+  website: string | null;
+  industry: string | null;
+  phone: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+  ownerMembership: OwnerMembership;
+};
 
 function toPrismaCompanyStatus(status: z.infer<typeof companyStatusSchema>) {
   switch (status) {
@@ -64,32 +101,19 @@ function toApiCompanyStatus(status: "LEAD" | "ACTIVE_CLIENT" | "INACTIVE") {
   }
 }
 
-async function findOrganizationBySlug(organizationSlug: string) {
-  return prisma.organization.findFirst({
-    where: {
-      slug: organizationSlug,
-      archivedAt: null,
-    },
-  });
+function toOwnerResponse(owner: OwnerMembership) {
+  return {
+    id: owner.id,
+    role: toApiRole(owner.role),
+    user: owner.user,
+  };
 }
 
-function toCompanyResponse(
-  company: {
-    id: string;
-    organizationId: string;
-    name: string;
-    status: "LEAD" | "ACTIVE_CLIENT" | "INACTIVE";
-    website: string | null;
-    industry: string | null;
-    phone: string | null;
-    createdAt: Date;
-    updatedAt: Date;
-  },
-  extras?: Record<string, unknown>,
-) {
+function toCompanyResponse(company: CompanyWithOwner, extras?: Record<string, unknown>) {
   return {
     id: company.id,
     organizationId: company.organizationId,
+    ownerMembershipId: company.ownerMembershipId,
     name: company.name,
     status: toApiCompanyStatus(company.status),
     website: company.website,
@@ -97,6 +121,7 @@ function toCompanyResponse(
     phone: company.phone,
     createdAt: company.createdAt,
     updatedAt: company.updatedAt,
+    owner: toOwnerResponse(company.ownerMembership),
     ...extras,
   };
 }
@@ -133,22 +158,96 @@ function toContactResponse(
   };
 }
 
-router.get("/api/organizations/:organizationSlug/companies", async (request, response) => {
-  const organization = await findOrganizationBySlug(request.params.organizationSlug);
+function isLeadershipRole(role: "admin" | "manager" | "sales_rep") {
+  return role !== "sales_rep";
+}
 
-  if (!organization) {
-    return response.status(404).json({ error: "Organization not found" });
+function companyOwnershipScope(membershipId: string, role: "admin" | "manager" | "sales_rep") {
+  return isLeadershipRole(role) ? {} : { ownerMembershipId: membershipId };
+}
+
+type CompanyOwnerResolution =
+  | { ownerMembershipId: string }
+  | { error: string; status: number };
+
+async function findActiveMembership(organizationId: string, membershipId: string) {
+  return prisma.membership.findFirst({
+    where: {
+      id: membershipId,
+      organizationId,
+      archivedAt: null,
+      user: {
+        isActive: true,
+        archivedAt: null,
+      },
+    },
+    select: ownerSelect,
+  });
+}
+
+async function resolveCompanyOwner(
+  organizationId: string,
+  currentMembership: { id: string; role: "admin" | "manager" | "sales_rep" },
+  requestedOwnerMembershipId: string | undefined,
+): Promise<CompanyOwnerResolution> {
+  if (!isLeadershipRole(currentMembership.role)) {
+    if (requestedOwnerMembershipId && requestedOwnerMembershipId !== currentMembership.id) {
+      return { error: "Sales reps cannot assign a company to another owner", status: 403 } as const;
+    }
+
+    return { ownerMembershipId: currentMembership.id } as const;
   }
 
+  const ownerMembershipId = requestedOwnerMembershipId ?? currentMembership.id;
+  const ownerMembership = await findActiveMembership(organizationId, ownerMembershipId);
+
+  if (!ownerMembership) {
+    return { error: "Company owner must be an active member of this organization", status: 400 } as const;
+  }
+
+  return { ownerMembershipId: ownerMembership.id } as const;
+}
+
+router.get(
+  "/api/organizations/:organizationSlug/memberships",
+  requireLeadershipRole,
+  async (request, response) => {
+    const memberships = await prisma.membership.findMany({
+      where: {
+        organizationId: request.auth!.organization.id,
+        archivedAt: null,
+        user: {
+          isActive: true,
+          archivedAt: null,
+        },
+      },
+      orderBy: [{ role: "asc" }, { createdAt: "asc" }],
+      select: ownerSelect,
+    });
+
+    return response.json({
+      data: memberships.map(toOwnerResponse),
+    });
+  },
+);
+
+router.get("/api/organizations/:organizationSlug/companies", async (request, response) => {
+  const { organization, membership } = request.auth!;
   const companies = await prisma.company.findMany({
     where: {
       organizationId: organization.id,
       archivedAt: null,
+      ...companyOwnershipScope(membership.id, membership.role),
     },
     orderBy: { createdAt: "asc" },
     include: {
+      ownerMembership: { select: ownerSelect },
       _count: {
-        select: { contacts: true },
+        select: {
+          contacts: {
+            where: { archivedAt: null },
+          },
+        },
       },
     },
   });
@@ -156,30 +255,25 @@ router.get("/api/organizations/:organizationSlug/companies", async (request, res
   return response.json({
     data: companies.map((company) =>
       toCompanyResponse(company, {
-      contactCount: company._count.contacts,
+        contactCount: company._count.contacts,
       }),
     ),
   });
 });
 
 router.get("/api/organizations/:organizationSlug/companies/:companyId", async (request, response) => {
-  const organization = await findOrganizationBySlug(request.params.organizationSlug);
-
-  if (!organization) {
-    return response.status(404).json({ error: "Organization not found" });
-  }
-
+  const { organization, membership } = request.auth!;
   const company = await prisma.company.findFirst({
     where: {
       id: request.params.companyId,
       organizationId: organization.id,
       archivedAt: null,
+      ...companyOwnershipScope(membership.id, membership.role),
     },
     include: {
+      ownerMembership: { select: ownerSelect },
       contacts: {
-        where: {
-          archivedAt: null,
-        },
+        where: { archivedAt: null },
         orderBy: { createdAt: "asc" },
         select: {
           id: true,
@@ -210,16 +304,18 @@ router.get("/api/organizations/:organizationSlug/companies/:companyId", async (r
 });
 
 router.get("/api/organizations/:organizationSlug/contacts", async (request, response) => {
-  const organization = await findOrganizationBySlug(request.params.organizationSlug);
-
-  if (!organization) {
-    return response.status(404).json({ error: "Organization not found" });
-  }
-
+  const { organization, membership } = request.auth!;
   const contacts = await prisma.contact.findMany({
     where: {
       organizationId: organization.id,
       archivedAt: null,
+      ...(isLeadershipRole(membership.role)
+        ? {}
+        : {
+            company: {
+              ownerMembershipId: membership.id,
+            },
+          }),
     },
     orderBy: { createdAt: "asc" },
     include: {
@@ -235,24 +331,26 @@ router.get("/api/organizations/:organizationSlug/contacts", async (request, resp
   return response.json({
     data: contacts.map((contact) =>
       toContactResponse(contact, {
-      company: contact.company,
+        company: contact.company,
       }),
     ),
   });
 });
 
 router.get("/api/organizations/:organizationSlug/contacts/:contactId", async (request, response) => {
-  const organization = await findOrganizationBySlug(request.params.organizationSlug);
-
-  if (!organization) {
-    return response.status(404).json({ error: "Organization not found" });
-  }
-
+  const { organization, membership } = request.auth!;
   const contact = await prisma.contact.findFirst({
     where: {
       id: request.params.contactId,
       organizationId: organization.id,
       archivedAt: null,
+      ...(isLeadershipRole(membership.role)
+        ? {}
+        : {
+            company: {
+              ownerMembershipId: membership.id,
+            },
+          }),
     },
     include: {
       company: {
@@ -276,12 +374,6 @@ router.get("/api/organizations/:organizationSlug/contacts/:contactId", async (re
 });
 
 router.post("/api/organizations/:organizationSlug/companies", async (request, response) => {
-  const organization = await findOrganizationBySlug(request.params.organizationSlug);
-
-  if (!organization) {
-    return response.status(404).json({ error: "Organization not found" });
-  }
-
   const parseResult = createCompanySchema.safeParse(request.body);
 
   if (!parseResult.success) {
@@ -291,21 +383,30 @@ router.post("/api/organizations/:organizationSlug/companies", async (request, re
     });
   }
 
+  const { organization, membership } = request.auth!;
+  const ownerResult = await resolveCompanyOwner(organization.id, membership, parseResult.data.ownerMembershipId);
+
+  if ("status" in ownerResult) {
+    return response.status(ownerResult.status).json({ error: ownerResult.error });
+  }
+
   try {
     const company = await prisma.company.create({
       data: {
         organizationId: organization.id,
+        ownerMembershipId: ownerResult.ownerMembershipId,
         name: parseResult.data.name,
         status: toPrismaCompanyStatus(parseResult.data.status),
         website: parseResult.data.website,
         industry: parseResult.data.industry,
         phone: parseResult.data.phone,
       },
+      include: {
+        ownerMembership: { select: ownerSelect },
+      },
     });
 
-    return response.status(201).json({
-      data: toCompanyResponse(company),
-    });
+    return response.status(201).json({ data: toCompanyResponse(company) });
   } catch (error) {
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
       return response.status(409).json({ error: "Company name already exists in this organization" });
@@ -316,12 +417,6 @@ router.post("/api/organizations/:organizationSlug/companies", async (request, re
 });
 
 router.patch("/api/organizations/:organizationSlug/companies/:companyId", async (request, response) => {
-  const organization = await findOrganizationBySlug(request.params.organizationSlug);
-
-  if (!organization) {
-    return response.status(404).json({ error: "Organization not found" });
-  }
-
   const parseResult = updateCompanySchema.safeParse(request.body);
 
   if (!parseResult.success) {
@@ -331,11 +426,18 @@ router.patch("/api/organizations/:organizationSlug/companies/:companyId", async 
     });
   }
 
+  const { organization, membership } = request.auth!;
+
+  if (parseResult.data.ownerMembershipId !== undefined && !isLeadershipRole(membership.role)) {
+    return response.status(403).json({ error: "Sales reps cannot reassign company ownership" });
+  }
+
   const existingCompany = await prisma.company.findFirst({
     where: {
       id: request.params.companyId,
       organizationId: organization.id,
       archivedAt: null,
+      ...companyOwnershipScope(membership.id, membership.role),
     },
   });
 
@@ -343,25 +445,31 @@ router.patch("/api/organizations/:organizationSlug/companies/:companyId", async 
     return response.status(404).json({ error: "Company not found in this organization" });
   }
 
+  const ownerResult = await resolveCompanyOwner(organization.id, membership, parseResult.data.ownerMembershipId);
+
+  if ("status" in ownerResult) {
+    return response.status(ownerResult.status).json({ error: ownerResult.error });
+  }
+
   try {
     const company = await prisma.company.update({
-      where: {
-        id: existingCompany.id,
-      },
+      where: { id: existingCompany.id },
       data: {
+        ownerMembershipId: parseResult.data.ownerMembershipId === undefined
+          ? undefined
+          : ownerResult.ownerMembershipId,
         name: parseResult.data.name,
-        status: parseResult.data.status
-          ? toPrismaCompanyStatus(parseResult.data.status)
-          : undefined,
+        status: parseResult.data.status ? toPrismaCompanyStatus(parseResult.data.status) : undefined,
         website: parseResult.data.website,
         industry: parseResult.data.industry,
         phone: parseResult.data.phone,
       },
+      include: {
+        ownerMembership: { select: ownerSelect },
+      },
     });
 
-    return response.json({
-      data: toCompanyResponse(company),
-    });
+    return response.json({ data: toCompanyResponse(company) });
   } catch (error) {
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
       return response.status(409).json({ error: "Company name already exists in this organization" });
@@ -372,12 +480,6 @@ router.patch("/api/organizations/:organizationSlug/companies/:companyId", async 
 });
 
 router.post("/api/organizations/:organizationSlug/contacts", async (request, response) => {
-  const organization = await findOrganizationBySlug(request.params.organizationSlug);
-
-  if (!organization) {
-    return response.status(404).json({ error: "Organization not found" });
-  }
-
   const parseResult = createContactSchema.safeParse(request.body);
 
   if (!parseResult.success) {
@@ -387,11 +489,13 @@ router.post("/api/organizations/:organizationSlug/contacts", async (request, res
     });
   }
 
+  const { organization, membership } = request.auth!;
   const company = await prisma.company.findFirst({
     where: {
       id: parseResult.data.companyId,
       organizationId: organization.id,
       archivedAt: null,
+      ...companyOwnershipScope(membership.id, membership.role),
     },
   });
 
@@ -402,7 +506,7 @@ router.post("/api/organizations/:organizationSlug/contacts", async (request, res
   const contact = await prisma.contact.create({
     data: {
       organizationId: organization.id,
-      companyId: parseResult.data.companyId,
+      companyId: company.id,
       firstName: parseResult.data.firstName,
       lastName: parseResult.data.lastName,
       email: parseResult.data.email,
@@ -421,19 +525,11 @@ router.post("/api/organizations/:organizationSlug/contacts", async (request, res
   });
 
   return response.status(201).json({
-    data: toContactResponse(contact, {
-      company: contact.company,
-    }),
+    data: toContactResponse(contact, { company: contact.company }),
   });
 });
 
 router.patch("/api/organizations/:organizationSlug/contacts/:contactId", async (request, response) => {
-  const organization = await findOrganizationBySlug(request.params.organizationSlug);
-
-  if (!organization) {
-    return response.status(404).json({ error: "Organization not found" });
-  }
-
   const parseResult = updateContactSchema.safeParse(request.body);
 
   if (!parseResult.success) {
@@ -443,11 +539,19 @@ router.patch("/api/organizations/:organizationSlug/contacts/:contactId", async (
     });
   }
 
+  const { organization, membership } = request.auth!;
   const existingContact = await prisma.contact.findFirst({
     where: {
       id: request.params.contactId,
       organizationId: organization.id,
       archivedAt: null,
+      ...(isLeadershipRole(membership.role)
+        ? {}
+        : {
+            company: {
+              ownerMembershipId: membership.id,
+            },
+          }),
     },
   });
 
@@ -461,10 +565,9 @@ router.patch("/api/organizations/:organizationSlug/contacts/:contactId", async (
         id: parseResult.data.companyId,
         organizationId: organization.id,
         archivedAt: null,
+        ...companyOwnershipScope(membership.id, membership.role),
       },
-      select: {
-        id: true,
-      },
+      select: { id: true },
     });
 
     if (!company) {
@@ -473,9 +576,7 @@ router.patch("/api/organizations/:organizationSlug/contacts/:contactId", async (
   }
 
   const contact = await prisma.contact.update({
-    where: {
-      id: existingContact.id,
-    },
+    where: { id: existingContact.id },
     data: {
       companyId: parseResult.data.companyId,
       firstName: parseResult.data.firstName,
@@ -496,28 +597,26 @@ router.patch("/api/organizations/:organizationSlug/contacts/:contactId", async (
   });
 
   return response.json({
-    data: toContactResponse(contact, {
-      company: contact.company,
-    }),
+    data: toContactResponse(contact, { company: contact.company }),
   });
 });
 
 router.delete("/api/organizations/:organizationSlug/contacts/:contactId", async (request, response) => {
-  const organization = await findOrganizationBySlug(request.params.organizationSlug);
-
-  if (!organization) {
-    return response.status(404).json({ error: "Organization not found" });
-  }
-
+  const { organization, membership } = request.auth!;
   const existingContact = await prisma.contact.findFirst({
     where: {
       id: request.params.contactId,
       organizationId: organization.id,
       archivedAt: null,
+      ...(isLeadershipRole(membership.role)
+        ? {}
+        : {
+            company: {
+              ownerMembershipId: membership.id,
+            },
+          }),
     },
-    select: {
-      id: true,
-    },
+    select: { id: true },
   });
 
   if (!existingContact) {
@@ -525,12 +624,8 @@ router.delete("/api/organizations/:organizationSlug/contacts/:contactId", async 
   }
 
   const archivedContact = await prisma.contact.update({
-    where: {
-      id: existingContact.id,
-    },
-    data: {
-      archivedAt: new Date(),
-    },
+    where: { id: existingContact.id },
+    data: { archivedAt: new Date() },
     select: {
       id: true,
       archivedAt: true,

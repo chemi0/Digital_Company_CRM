@@ -73,6 +73,7 @@ model Membership {
   archivedAt     DateTime?
   organization   Organization   @relation(fields: [organizationId], references: [id])
   user           User           @relation(fields: [userId], references: [id])
+  ownedCompanies Company[]      @relation("CompanyOwner")
 
   @@unique([organizationId, userId])
 }
@@ -95,6 +96,7 @@ model Invitation {
 model Company {
   id             String        @id @default(cuid())
   organizationId String
+  ownerMembershipId String
   name           String
   status         CompanyStatus
   website        String?
@@ -104,10 +106,12 @@ model Company {
   updatedAt      DateTime      @updatedAt
   archivedAt     DateTime?
   organization   Organization  @relation(fields: [organizationId], references: [id])
+  ownerMembership Membership   @relation("CompanyOwner", fields: [ownerMembershipId], references: [id])
   contacts       Contact[]
 
   @@unique([organizationId, name])
   @@index([organizationId])
+  @@index([ownerMembershipId])
 }
 
 model Contact {

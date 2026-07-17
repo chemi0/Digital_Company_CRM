@@ -1,5 +1,5 @@
 import { zodResolver } from "@hookform/resolvers/zod";
-import type { CompanyFormValues, CompanyStatus } from "@agency-crm/shared";
+import type { CompanyFormValues, CompanyOwner, CompanyStatus } from "@agency-crm/shared";
 import type { ReactNode } from "react";
 import { useEffect } from "react";
 import { useForm } from "react-hook-form";
@@ -15,6 +15,7 @@ const companyFormSchema = z.object({
     .refine((value) => value.length === 0 || z.url().safeParse(value).success, "Enter a valid website"),
   industry: z.string().trim(),
   phone: z.string().trim(),
+  ownerMembershipId: z.string(),
 });
 
 type CompanyFormState = z.infer<typeof companyFormSchema>;
@@ -25,10 +26,13 @@ type CompanyInitialValues = {
   website?: string | null;
   industry?: string | null;
   phone?: string | null;
+  ownerMembershipId?: string;
 };
 
 type CompanyFormProps = {
   initialValues?: CompanyInitialValues;
+  owners?: CompanyOwner[];
+  canAssignOwner?: boolean;
   submitLabel: string;
   onSubmit: (values: CompanyFormValues) => Promise<void> | void;
 };
@@ -46,6 +50,7 @@ function toFormDefaults(initialValues?: CompanyInitialValues): CompanyFormState 
     website: initialValues?.website ?? "",
     industry: initialValues?.industry ?? "",
     phone: initialValues?.phone ?? "",
+    ownerMembershipId: initialValues?.ownerMembershipId ?? "",
   };
 }
 
@@ -56,10 +61,17 @@ function sanitizeCompanyValues(values: CompanyFormState): CompanyFormValues {
     website: values.website.trim() || undefined,
     industry: values.industry.trim() || undefined,
     phone: values.phone.trim() || undefined,
+    ownerMembershipId: values.ownerMembershipId || undefined,
   };
 }
 
-export function CompanyForm({ initialValues, submitLabel, onSubmit }: CompanyFormProps) {
+export function CompanyForm({
+  initialValues,
+  owners = [],
+  canAssignOwner = false,
+  submitLabel,
+  onSubmit,
+}: CompanyFormProps) {
   const {
     register,
     handleSubmit,
@@ -104,11 +116,35 @@ export function CompanyForm({ initialValues, submitLabel, onSubmit }: CompanyFor
         <input className="input-field" placeholder="+381 11 555 0101" {...register("phone")} />
       </FormField>
 
+      {canAssignOwner ? (
+        <FormField label="Account owner" error={errors.ownerMembershipId?.message}>
+          <select className="input-field" {...register("ownerMembershipId")}>
+            <option value="">Assign to me</option>
+            {owners.map((owner) => (
+              <option key={owner.id} value={owner.id}>
+                {owner.user.firstName} {owner.user.lastName} ({formatRole(owner.role)})
+              </option>
+            ))}
+          </select>
+        </FormField>
+      ) : null}
+
       <Button type="submit" size="lg" className="justify-center" disabled={isSubmitting}>
         {submitLabel}
       </Button>
     </form>
   );
+}
+
+function formatRole(role: CompanyOwner["role"]) {
+  switch (role) {
+    case "admin":
+      return "Admin";
+    case "manager":
+      return "Manager";
+    case "sales_rep":
+      return "Sales rep";
+  }
 }
 
 function FormField({ children, error, label }: { children: ReactNode; error?: string; label: string }) {

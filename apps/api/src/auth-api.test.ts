@@ -65,7 +65,7 @@ async function ensureDemoAdmin() {
 }
 
 beforeAll(async () => {
-  await ensureDemoAdmin();
+  const { user: demoAdmin } = await ensureDemoAdmin();
 
   const forbiddenOrganization = await prisma.organization.upsert({
     where: { slug: forbiddenOrgSlug },
@@ -79,6 +79,24 @@ beforeAll(async () => {
     },
   });
 
+  const forbiddenMembership = await prisma.membership.upsert({
+    where: {
+      organizationId_userId: {
+        organizationId: forbiddenOrganization.id,
+        userId: demoAdmin.id,
+      },
+    },
+    update: {
+      role: "ADMIN",
+      archivedAt: null,
+    },
+    create: {
+      organizationId: forbiddenOrganization.id,
+      userId: demoAdmin.id,
+      role: "ADMIN",
+    },
+  });
+
   await prisma.company.upsert({
     where: {
       organizationId_name: {
@@ -88,10 +106,12 @@ beforeAll(async () => {
     },
     update: {
       status: "LEAD",
+      ownerMembershipId: forbiddenMembership.id,
       archivedAt: null,
     },
     create: {
       organizationId: forbiddenOrganization.id,
+      ownerMembershipId: forbiddenMembership.id,
       name: "Forbidden Company",
       status: "LEAD",
     },
@@ -105,6 +125,10 @@ afterAll(async () => {
 
   if (forbiddenOrganization) {
     await prisma.company.deleteMany({
+      where: { organizationId: forbiddenOrganization.id },
+    });
+
+    await prisma.membership.deleteMany({
       where: { organizationId: forbiddenOrganization.id },
     });
 

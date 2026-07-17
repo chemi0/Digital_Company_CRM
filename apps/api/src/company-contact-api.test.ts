@@ -12,6 +12,7 @@ const testUserEmail = "api-test-admin@example.com";
 const testPassword = "ApiAdmin123!";
 
 let authenticatedAgent: ReturnType<typeof request.agent>;
+let testMembershipId: string;
 
 async function ensureTestOrganization() {
   return prisma.organization.upsert({
@@ -39,10 +40,12 @@ async function ensureBaseCompany() {
     },
     update: {
       status: "LEAD",
+      ownerMembershipId: testMembershipId,
       archivedAt: null,
     },
     create: {
       organizationId: organization.id,
+      ownerMembershipId: testMembershipId,
       name: baseCompanyName,
       status: "LEAD",
     },
@@ -51,7 +54,6 @@ async function ensureBaseCompany() {
 
 beforeAll(async () => {
   const organization = await ensureTestOrganization();
-  const company = await ensureBaseCompany();
   const passwordHash = await bcrypt.hash(testPassword, 10);
 
   const user = await prisma.user.upsert({
@@ -72,7 +74,7 @@ beforeAll(async () => {
     },
   });
 
-  await prisma.membership.upsert({
+  const membership = await prisma.membership.upsert({
     where: {
       organizationId_userId: {
         organizationId: organization.id,
@@ -89,6 +91,9 @@ beforeAll(async () => {
       role: "ADMIN",
     },
   });
+
+  testMembershipId = membership.id;
+  const company = await ensureBaseCompany();
 
   await prisma.contact.deleteMany({
     where: {
@@ -136,11 +141,11 @@ afterAll(async () => {
     where: { organizationId: organization.id },
   });
 
-  await prisma.membership.deleteMany({
+  await prisma.company.deleteMany({
     where: { organizationId: organization.id },
   });
 
-  await prisma.company.deleteMany({
+  await prisma.membership.deleteMany({
     where: { organizationId: organization.id },
   });
 

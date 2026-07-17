@@ -3,7 +3,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, test, vi } from "vitest";
-import type { AuthSession, CompanyDetail, CompanySummary, ContactDetail, ContactSummary } from "@agency-crm/shared";
+import type { AuthSession, CompanyDetail, CompanyOwner, CompanySummary, ContactDetail, ContactSummary } from "@agency-crm/shared";
 import App from "./App";
 import { AuthProvider } from "@/lib/auth-context";
 
@@ -34,12 +34,46 @@ const demoSession: AuthSession = {
   },
 };
 
+const ownerOptions: CompanyOwner[] = [
+  {
+    id: "membership-1",
+    role: "admin",
+    user: {
+      id: "user-1",
+      firstName: "Atlas",
+      lastName: "Owner",
+      email: "owner@atlas-digital.test",
+    },
+  },
+  {
+    id: "membership-manager",
+    role: "manager",
+    user: {
+      id: "user-manager",
+      firstName: "Maya",
+      lastName: "Manager",
+      email: "manager@atlas-digital.test",
+    },
+  },
+  {
+    id: "membership-sales",
+    role: "sales_rep",
+    user: {
+      id: "user-sales",
+      firstName: "Sam",
+      lastName: "Sales",
+      email: "sales@atlas-digital.test",
+    },
+  },
+];
+
 function createStore(overrides?: Partial<Store>): Store {
   return {
     companies: [
       {
         id: "company-1",
         organizationId: "org-1",
+        ownerMembershipId: "membership-1",
         name: "Acme Studio",
         status: "lead",
         website: "https://acme.example",
@@ -48,6 +82,7 @@ function createStore(overrides?: Partial<Store>): Store {
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
         contactCount: 1,
+        owner: ownerOptions[0],
       },
     ],
     contacts: [
@@ -189,14 +224,29 @@ function installApiMock(store: Store) {
       return jsonResponse(companies);
     }
 
+    if (path === `/api/organizations/${organizationSlug}/memberships` && method === "GET") {
+      if (store.authSession.membership.role === "sales_rep") {
+        return errorResponse("Leadership access required", 403);
+      }
+
+      return jsonResponse(ownerOptions);
+    }
+
     if (path === `/api/organizations/${organizationSlug}/contacts` && method === "GET") {
       return jsonResponse(store.contacts);
     }
 
     if (path === `/api/organizations/${organizationSlug}/companies` && method === "POST") {
+      const owner = ownerOptions.find((option) => option.id === (body.ownerMembershipId ?? store.authSession?.membership.id));
+
+      if (!owner) {
+        return errorResponse("Invalid owner", 400);
+      }
+
       const company: CompanySummary = {
         id: `company-${store.companies.length + 1}`,
         organizationId: "org-1",
+        ownerMembershipId: owner.id,
         name: body.name,
         status: body.status,
         website: body.website ?? null,
@@ -205,6 +255,7 @@ function installApiMock(store: Store) {
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
         contactCount: 0,
+        owner,
       };
 
       store.companies.push(company);
@@ -255,6 +306,7 @@ function installApiMock(store: Store) {
       }
 
       Object.assign(company, {
+        ownerMembershipId: body.ownerMembershipId ?? company.ownerMembershipId,
         name: body.name ?? company.name,
         status: body.status ?? company.status,
         website: body.website ?? company.website,
@@ -262,6 +314,10 @@ function installApiMock(store: Store) {
         phone: body.phone ?? company.phone,
         updatedAt: new Date().toISOString(),
       });
+
+      if (body.ownerMembershipId) {
+        company.owner = ownerOptions.find((option) => option.id === body.ownerMembershipId) ?? company.owner;
+      }
 
       return jsonResponse(company);
     }
@@ -365,6 +421,52 @@ describe("agency CRM authentication", () => {
     expect(screen.getByText("Atlas Owner")).toBeInTheDocument();
     expect(screen.getByText("Admin")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Log out" })).toBeInTheDocument();
+  });
+
+  test("lets leadership assign a company owner", async () => {
+    const managerSession: AuthSession = {
+      ...demoSession,
+      id: "user-manager",
+      email: "manager@atlas-digital.test",
+      firstName: "Maya",
+      lastName: "Manager",
+      membership: {
+        id: "membership-manager",
+        role: "manager",
+      },
+    };
+
+    installApiMock(createStore({ authSession: managerSession }));
+    renderApp("/companies");
+
+    await screen.findByLabelText("Account owner");
+    await waitFor(() => {
+      expect(screen.getByRole("combobox", { name: "Account owner" })).toHaveValue("membership-manager");
+    });
+    expect(screen.getByText("Atlas Owner")).toBeInTheDocument();
+  });
+
+  test("does not expose owner assignment to sales reps", async () => {
+    const salesSession: AuthSession = {
+      ...demoSession,
+      id: "user-sales",
+      email: "sales@atlas-digital.test",
+      firstName: "Sam",
+      lastName: "Sales",
+      membership: {
+        id: "membership-sales",
+        role: "sales_rep",
+      },
+    };
+    const salesStore = createStore({ authSession: salesSession });
+    salesStore.companies[0].ownerMembershipId = "membership-sales";
+    salesStore.companies[0].owner = ownerOptions[2];
+
+    installApiMock(salesStore);
+    renderApp("/companies");
+
+    await screen.findByRole("heading", { name: "Companies" });
+    expect(screen.queryByLabelText("Account owner")).not.toBeInTheDocument();
   });
 
   test("logs out and returns to the login screen", async () => {

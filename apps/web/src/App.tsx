@@ -35,6 +35,7 @@ import {
   getContact,
   listCompanies,
   listContacts,
+  listTeamMembers,
   updateCompany,
   updateContact,
 } from "@/lib/crm-api";
@@ -45,6 +46,7 @@ const queryKeys = {
   company: (companyId: string) => ["company", companyId] as const,
   contacts: ["contacts"] as const,
   contact: (contactId: string) => ["contact", contactId] as const,
+  teamMembers: ["team-members"] as const,
 };
 
 const demoCredentials: LoginCredentials | undefined = import.meta.env.DEV
@@ -172,9 +174,16 @@ function ProtectedRoute() {
 
 function CompaniesPage() {
   const queryClient = useQueryClient();
+  const { session } = useAuth();
+  const canAssignOwner = session?.membership.role !== "sales_rep";
   const companiesQuery = useQuery({
     queryKey: queryKeys.companies,
     queryFn: listCompanies,
+  });
+  const teamMembersQuery = useQuery({
+    queryKey: queryKeys.teamMembers,
+    queryFn: listTeamMembers,
+    enabled: canAssignOwner,
   });
 
   const createCompanyMutation = useMutation({
@@ -204,6 +213,13 @@ function CompaniesPage() {
 
         <SectionCard title="Add company" description="Create a company.">
           <CompanyForm
+            canAssignOwner={canAssignOwner}
+            owners={teamMembersQuery.data}
+            initialValues={
+              canAssignOwner && session
+                ? { ownerMembershipId: session.membership.id }
+                : undefined
+            }
             submitLabel="Create company"
             onSubmit={async (values) => {
               await createCompanyMutation.mutateAsync(values);
@@ -217,6 +233,8 @@ function CompaniesPage() {
 
 function CompanyDetailPage() {
   const queryClient = useQueryClient();
+  const { session } = useAuth();
+  const canAssignOwner = session?.membership.role !== "sales_rep";
   const companyId = useParams().companyId ?? "";
   const companyQuery = useQuery({
     queryKey: queryKeys.company(companyId),
@@ -232,6 +250,11 @@ function CompanyDetailPage() {
         queryClient.invalidateQueries({ queryKey: queryKeys.companies }),
       ]);
     },
+  });
+  const teamMembersQuery = useQuery({
+    queryKey: queryKeys.teamMembers,
+    queryFn: listTeamMembers,
+    enabled: canAssignOwner,
   });
 
   const company = companyQuery.data;
@@ -257,6 +280,11 @@ function CompanyDetailPage() {
                 <Metric label="Industry" value={company.industry ?? "Not set"} icon={<Building2 className="size-4" />} />
                 <Metric label="Website" value={company.website ?? "Not set"} icon={<Globe className="size-4" />} />
                 <Metric label="Phone" value={company.phone ?? "Not set"} icon={<Phone className="size-4" />} />
+                <Metric
+                  label="Account owner"
+                  value={`${company.owner.user.firstName} ${company.owner.user.lastName}`}
+                  icon={<UserRoundCheck className="size-4" />}
+                />
               </dl>
 
               <div className="mt-6 space-y-3">
@@ -294,6 +322,8 @@ function CompanyDetailPage() {
             <SectionCard title="Edit company" description="Update the company using the current PATCH endpoint.">
               <CompanyForm
                 initialValues={company}
+                canAssignOwner={canAssignOwner}
+                owners={teamMembersQuery.data}
                 submitLabel="Save company"
                 onSubmit={async (values) => {
                   await updateCompanyMutation.mutateAsync(values);
@@ -501,6 +531,9 @@ function CompanyRow({ company }: { company: CompanySummary }) {
       </div>
       <div className="flex flex-col items-start gap-2 md:items-end">
         <StatusPill status={company.status} />
+        <span className="text-sm font-medium text-slate-600">
+          {company.owner.user.firstName} {company.owner.user.lastName}
+        </span>
         <span className="text-sm font-medium text-slate-600">{formatContactCount(company.contactCount)}</span>
       </div>
     </Link>

@@ -29,9 +29,21 @@ export type LoginCredentials = {
   password: string;
 };
 
+export type CompanyOwner = {
+  id: string;
+  role: UserRole;
+  user: {
+    id: string;
+    firstName: string;
+    lastName: string;
+    email: string;
+  };
+};
+
 export type CompanySummary = {
   id: string;
   organizationId: string;
+  ownerMembershipId: string;
   name: string;
   status: CompanyStatus;
   website: string | null;
@@ -40,6 +52,7 @@ export type CompanySummary = {
   createdAt: string | Date;
   updatedAt: string | Date;
   contactCount: number;
+  owner: CompanyOwner;
 };
 
 export type CompanyContact = {
@@ -88,6 +101,7 @@ export type CompanyFormValues = {
   website?: string;
   industry?: string;
   phone?: string;
+  ownerMembershipId?: string;
 };
 
 export type ContactFormValues = {

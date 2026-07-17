@@ -41,3 +41,15 @@ export function requireOrganizationAccess(request: Request, response: Response, 
 
   return next();
 }
+
+export function requireLeadershipRole(request: Request, response: Response, next: NextFunction) {
+  if (!request.auth) {
+    return response.status(401).json({ error: "Authentication required" });
+  }
+
+  if (request.auth.membership.role === "sales_rep") {
+    return response.status(403).json({ error: "Leadership access required" });
+  }
+
+  return next();
+}

@@ -1,6 +1,7 @@
 import type {
   CompanyDetail,
   CompanyFormValues,
+  CompanyOwner,
   CompanySummary,
   ContactDetail,
   ContactFormValues,
@@ -15,6 +16,10 @@ function buildOrgPath(path: string) {
 
 export function listCompanies() {
   return requestJson<CompanySummary[]>(buildOrgPath("/companies"));
+}
+
+export function listTeamMembers() {
+  return requestJson<CompanyOwner[]>(buildOrgPath("/memberships"));
 }
 
 export function getCompany(companyId: string) {
