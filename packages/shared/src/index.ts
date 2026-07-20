@@ -121,3 +121,130 @@ export type DealStage =
   | "proposal_sent"
   | "won"
   | "lost";
+
+export type DealCompany = {
+  id: string;
+  name: string;
+};
+
+export type DealPrimaryContact = {
+  id: string;
+  firstName: string;
+  lastName: string;
+  email: string | null;
+};
+
+export type DealSummary = {
+  id: string;
+  organizationId: string;
+  companyId: string;
+  primaryContactId: string | null;
+  ownerMembershipId: string;
+  title: string;
+  stage: DealStage;
+  amountCents: number;
+  currency: string;
+  source: string | null;
+  expectedCloseDate: string | Date | null;
+  description: string | null;
+  createdAt: string | Date;
+  updatedAt: string | Date;
+  owner: CompanyOwner;
+  company: DealCompany;
+  primaryContact: DealPrimaryContact | null;
+};
+
+export type DealDetail = DealSummary;
+
+export type DealFormValues = {
+  companyId: string;
+  primaryContactId?: string | null;
+  ownerMembershipId?: string;
+  title: string;
+  stage: DealStage;
+  amountCents: number;
+  currency: string;
+  source?: string | null;
+  expectedCloseDate?: string | null;
+  description?: string | null;
+};
+
+export type ActivityType = "call" | "email" | "meeting" | "note";
+
+export type TaskPriority = "low" | "medium" | "high";
+
+export type WorkContact = {
+  id: string;
+  firstName: string;
+  lastName: string;
+};
+
+export type WorkDeal = {
+  id: string;
+  title: string;
+};
+
+export type ActivitySummary = {
+  id: string;
+  organizationId: string;
+  companyId: string;
+  contactId: string | null;
+  dealId: string | null;
+  type: ActivityType;
+  subject: string;
+  body: string | null;
+  occurredAt: string | Date;
+  createdAt: string | Date;
+  updatedAt: string | Date;
+  author: CompanyOwner;
+  company: ContactCompany;
+  contact: WorkContact | null;
+  deal: WorkDeal | null;
+};
+
+export type TaskSummary = {
+  id: string;
+  organizationId: string;
+  companyId: string;
+  contactId: string | null;
+  dealId: string | null;
+  assigneeMembershipId: string;
+  createdByMembershipId: string;
+  title: string;
+  description: string | null;
+  priority: TaskPriority;
+  dueAt: string | Date | null;
+  completedAt: string | Date | null;
+  createdAt: string | Date;
+  updatedAt: string | Date;
+  assignee: CompanyOwner;
+  createdBy: CompanyOwner;
+  company: ContactCompany;
+  contact: WorkContact | null;
+  deal: WorkDeal | null;
+};
+
+export type ActivityFormValues = {
+  companyId: string;
+  contactId?: string | null;
+  dealId?: string | null;
+  type: ActivityType;
+  subject: string;
+  body?: string | null;
+  occurredAt?: string;
+};
+
+export type TaskFormValues = {
+  companyId: string;
+  contactId?: string | null;
+  dealId?: string | null;
+  assigneeMembershipId?: string;
+  title: string;
+  description?: string | null;
+  priority: TaskPriority;
+  dueAt?: string | null;
+};
+
+export type TaskUpdateValues = Partial<TaskFormValues> & {
+  completed?: boolean;
+};

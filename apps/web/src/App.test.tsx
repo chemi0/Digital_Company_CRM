@@ -3,13 +3,27 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, test, vi } from "vitest";
-import type { AuthSession, CompanyDetail, CompanyOwner, CompanySummary, ContactDetail, ContactSummary } from "@agency-crm/shared";
+import type {
+  AuthSession,
+  CompanyDetail,
+  CompanyOwner,
+  CompanySummary,
+  ContactDetail,
+  ContactSummary,
+  DealDetail,
+  DealSummary,
+  ActivitySummary,
+  TaskSummary,
+} from "@agency-crm/shared";
 import App from "./App";
 import { AuthProvider } from "@/lib/auth-context";
 
 type Store = {
   companies: CompanySummary[];
   contacts: ContactSummary[];
+  deals: DealSummary[];
+  activities: ActivitySummary[];
+  tasks: TaskSummary[];
   authSession: AuthSession | null;
   allowRefresh: boolean;
 };
@@ -104,6 +118,48 @@ function createStore(overrides?: Partial<Store>): Store {
         },
       },
     ],
+    deals: [
+      {
+        id: "deal-1",
+        organizationId: "org-1",
+        companyId: "company-1",
+        primaryContactId: "contact-1",
+        ownerMembershipId: "membership-1",
+        title: "Website support retainer",
+        stage: "proposal_sent",
+        amountCents: 180000,
+        currency: "EUR",
+        source: "Referral",
+        expectedCloseDate: "2026-08-15T00:00:00.000Z",
+        description: "Monthly website support.",
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        owner: ownerOptions[0],
+        company: { id: "company-1", name: "Acme Studio" },
+        primaryContact: {
+          id: "contact-1",
+          firstName: "Ana",
+          lastName: "Markovic",
+          email: "ana@acme.example",
+        },
+      },
+    ],
+    activities: [
+      {
+        id: "activity-1", organizationId: "org-1", companyId: "company-1", contactId: "contact-1", dealId: "deal-1",
+        type: "call", subject: "Discovery call completed", body: "Discussed the delivery timeline.", occurredAt: "2026-07-17T10:00:00.000Z",
+        createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), author: ownerOptions[0],
+        company: { id: "company-1", name: "Acme Studio" }, contact: { id: "contact-1", firstName: "Ana", lastName: "Markovic" }, deal: { id: "deal-1", title: "Website support retainer" },
+      },
+    ],
+    tasks: [
+      {
+        id: "task-1", organizationId: "org-1", companyId: "company-1", contactId: "contact-1", dealId: "deal-1",
+        assigneeMembershipId: "membership-1", createdByMembershipId: "membership-manager", title: "Send proposal recap", description: "Confirm the monthly delivery plan.", priority: "high", dueAt: "2026-07-22T00:00:00.000Z", completedAt: null,
+        createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), assignee: ownerOptions[0], createdBy: ownerOptions[1],
+        company: { id: "company-1", name: "Acme Studio" }, contact: { id: "contact-1", firstName: "Ana", lastName: "Markovic" }, deal: { id: "deal-1", title: "Website support retainer" },
+      },
+    ],
     authSession: null,
     allowRefresh: false,
     ...overrides,
@@ -163,6 +219,10 @@ function toContactDetail(store: Store, contactId: string): ContactDetail | null 
   }
 
   return contact;
+}
+
+function toDealDetail(store: Store, dealId: string): DealDetail | null {
+  return store.deals.find((item) => item.id === dealId) ?? null;
 }
 
 function installApiMock(store: Store) {
@@ -236,6 +296,18 @@ function installApiMock(store: Store) {
       return jsonResponse(store.contacts);
     }
 
+    if (path === `/api/organizations/${organizationSlug}/deals` && method === "GET") {
+      return jsonResponse(store.deals);
+    }
+
+    if (path === `/api/organizations/${organizationSlug}/activities` && method === "GET") {
+      return jsonResponse(store.activities);
+    }
+
+    if (path === `/api/organizations/${organizationSlug}/tasks` && method === "GET") {
+      return jsonResponse(store.tasks.filter((task) => task.completedAt === null));
+    }
+
     if (path === `/api/organizations/${organizationSlug}/companies` && method === "POST") {
       const owner = ownerOptions.find((option) => option.id === (body.ownerMembershipId ?? store.authSession?.membership.id));
 
@@ -289,6 +361,73 @@ function installApiMock(store: Store) {
 
       store.contacts.push(contact);
       return jsonResponse(contact, 201);
+    }
+
+    if (path === `/api/organizations/${organizationSlug}/deals` && method === "POST") {
+      const company = store.companies.find((item) => item.id === body.companyId);
+      const contact = store.contacts.find((item) => item.id === body.primaryContactId && item.companyId === body.companyId);
+      const owner = ownerOptions.find((option) => option.id === (body.ownerMembershipId ?? company?.ownerMembershipId));
+
+      if (!company || !owner) {
+        return errorResponse("Not found", 404);
+      }
+
+      const deal: DealSummary = {
+        id: `deal-${store.deals.length + 1}`,
+        organizationId: "org-1",
+        companyId: company.id,
+        primaryContactId: contact?.id ?? null,
+        ownerMembershipId: owner.id,
+        title: body.title,
+        stage: body.stage,
+        amountCents: body.amountCents,
+        currency: body.currency,
+        source: body.source ?? null,
+        expectedCloseDate: body.expectedCloseDate ? `${body.expectedCloseDate}T00:00:00.000Z` : null,
+        description: body.description ?? null,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        owner,
+        company: { id: company.id, name: company.name },
+        primaryContact: contact
+          ? { id: contact.id, firstName: contact.firstName, lastName: contact.lastName, email: contact.email }
+          : null,
+      };
+
+      store.deals.push(deal);
+      return jsonResponse(deal, 201);
+    }
+
+    if (path === `/api/organizations/${organizationSlug}/activities` && method === "POST") {
+      const company = store.companies.find((item) => item.id === body.companyId);
+      const contact = store.contacts.find((item) => item.id === body.contactId);
+      const deal = store.deals.find((item) => item.id === body.dealId);
+      if (!company) return errorResponse("Not found", 404);
+      const activity: ActivitySummary = {
+        id: `activity-${store.activities.length + 1}`, organizationId: "org-1", companyId: company.id, contactId: contact?.id ?? null, dealId: deal?.id ?? null,
+        type: body.type, subject: body.subject, body: body.body ?? null, occurredAt: new Date().toISOString(), createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+        author: ownerOptions.find((owner) => owner.id === store.authSession?.membership.id) ?? ownerOptions[0], company: { id: company.id, name: company.name },
+        contact: contact ? { id: contact.id, firstName: contact.firstName, lastName: contact.lastName } : null, deal: deal ? { id: deal.id, title: deal.title } : null,
+      };
+      store.activities.unshift(activity);
+      return jsonResponse(activity, 201);
+    }
+
+    if (path === `/api/organizations/${organizationSlug}/tasks` && method === "POST") {
+      const company = store.companies.find((item) => item.id === body.companyId);
+      const contact = store.contacts.find((item) => item.id === body.contactId);
+      const deal = store.deals.find((item) => item.id === body.dealId);
+      const assignee = ownerOptions.find((owner) => owner.id === (body.assigneeMembershipId ?? store.authSession?.membership.id));
+      if (!company || !assignee) return errorResponse("Not found", 404);
+      const task: TaskSummary = {
+        id: `task-${store.tasks.length + 1}`, organizationId: "org-1", companyId: company.id, contactId: contact?.id ?? null, dealId: deal?.id ?? null,
+        assigneeMembershipId: assignee.id, createdByMembershipId: store.authSession?.membership.id ?? "membership-1", title: body.title, description: body.description ?? null, priority: body.priority,
+        dueAt: body.dueAt ? `${body.dueAt}T00:00:00.000Z` : null, completedAt: null, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+        assignee, createdBy: ownerOptions.find((owner) => owner.id === store.authSession?.membership.id) ?? ownerOptions[0], company: { id: company.id, name: company.name },
+        contact: contact ? { id: contact.id, firstName: contact.firstName, lastName: contact.lastName } : null, deal: deal ? { id: deal.id, title: deal.title } : null,
+      };
+      store.tasks.push(task);
+      return jsonResponse(task, 201);
     }
 
     const companyMatch = path.match(new RegExp(`/api/organizations/${organizationSlug}/companies/([^/]+)$`));
@@ -358,6 +497,62 @@ function installApiMock(store: Store) {
     if (contactMatch && method === "DELETE") {
       store.contacts = store.contacts.filter((item) => item.id !== contactMatch[1]);
       return jsonResponse({ id: contactMatch[1], archived: true });
+    }
+
+    const dealMatch = path.match(new RegExp(`/api/organizations/${organizationSlug}/deals/([^/]+)$`));
+
+    if (dealMatch && method === "GET") {
+      const deal = toDealDetail(store, dealMatch[1]);
+      return deal ? jsonResponse(deal) : errorResponse("Not found", 404);
+    }
+
+    if (dealMatch && method === "PATCH") {
+      const deal = store.deals.find((item) => item.id === dealMatch[1]);
+      const company = store.companies.find((item) => item.id === (body.companyId ?? deal?.companyId));
+      const contact = store.contacts.find((item) => item.id === (body.primaryContactId ?? deal?.primaryContactId));
+      const owner = ownerOptions.find((option) => option.id === (body.ownerMembershipId ?? deal?.ownerMembershipId));
+
+      if (!deal || !company || !owner) {
+        return errorResponse("Not found", 404);
+      }
+
+      Object.assign(deal, {
+        companyId: company.id,
+        primaryContactId: body.primaryContactId === null ? null : contact?.id ?? deal.primaryContactId,
+        ownerMembershipId: owner.id,
+        title: body.title ?? deal.title,
+        stage: body.stage ?? deal.stage,
+        amountCents: body.amountCents ?? deal.amountCents,
+        currency: body.currency ?? deal.currency,
+        source: body.source ?? deal.source,
+        expectedCloseDate: body.expectedCloseDate === null ? null : body.expectedCloseDate ?? deal.expectedCloseDate,
+        description: body.description ?? deal.description,
+        updatedAt: new Date().toISOString(),
+        owner,
+        company: { id: company.id, name: company.name },
+        primaryContact: contact
+          ? { id: contact.id, firstName: contact.firstName, lastName: contact.lastName, email: contact.email }
+          : null,
+      });
+
+      return jsonResponse(deal);
+    }
+
+    if (dealMatch && method === "DELETE") {
+      store.deals = store.deals.filter((item) => item.id !== dealMatch[1]);
+      return jsonResponse({ id: dealMatch[1], archived: true });
+    }
+
+    const taskMatch = path.match(new RegExp(`/api/organizations/${organizationSlug}/tasks/([^/]+)$`));
+    if (taskMatch && method === "PATCH") {
+      const task = store.tasks.find((item) => item.id === taskMatch[1]);
+      if (!task) return errorResponse("Not found", 404);
+      task.completedAt = body.completed ? new Date().toISOString() : task.completedAt;
+      return jsonResponse(task);
+    }
+    if (taskMatch && method === "DELETE") {
+      store.tasks = store.tasks.filter((item) => item.id !== taskMatch[1]);
+      return jsonResponse({ id: taskMatch[1], archived: true });
     }
 
     throw new Error(`Unhandled request: ${method} ${path}`);
@@ -467,6 +662,76 @@ describe("agency CRM authentication", () => {
 
     await screen.findByRole("heading", { name: "Companies" });
     expect(screen.queryByLabelText("Account owner")).not.toBeInTheDocument();
+  });
+
+  test("renders the pipeline and creates a deal", async () => {
+    installApiMock(createStore({ authSession: demoSession }));
+    const user = userEvent.setup();
+    renderApp("/deals");
+
+    expect(await screen.findByRole("heading", { name: "Deals" })).toBeInTheDocument();
+    expect(await screen.findByText("Website support retainer")).toBeInTheDocument();
+
+    await user.type(screen.getByLabelText("Deal title"), "Discovery workshop");
+    await user.selectOptions(screen.getByLabelText("Company"), "company-1");
+    await user.selectOptions(screen.getByLabelText("Primary contact"), "contact-1");
+    await user.clear(screen.getByLabelText("Amount"));
+    await user.type(screen.getByLabelText("Amount"), "2500.00");
+    await user.click(screen.getByRole("button", { name: "Create deal" }));
+
+    expect(await screen.findByText("Discovery workshop")).toBeInTheDocument();
+  });
+
+  test("archives a deal from its detail screen", async () => {
+    installApiMock(createStore({ authSession: demoSession }));
+    const user = userEvent.setup();
+    renderApp("/deals/deal-1");
+
+    expect(await screen.findByRole("heading", { name: "Website support retainer" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Archive deal" }));
+
+    expect(await screen.findByRole("heading", { name: "Deals" })).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.queryByText("Website support retainer")).not.toBeInTheDocument();
+    });
+  });
+
+  test("renders the authenticated work area", async () => {
+    installApiMock(createStore({ authSession: demoSession }));
+    const user = userEvent.setup();
+    renderApp("/work");
+
+    expect(await screen.findByRole("heading", { name: "My work" })).toBeInTheDocument();
+    expect(await screen.findByText("Send proposal recap")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Complete" }));
+    await waitFor(() => expect(screen.queryByText("Send proposal recap")).not.toBeInTheDocument());
+  });
+
+  test("logs customer activity from the work area", async () => {
+    installApiMock(createStore({ authSession: demoSession }));
+    const user = userEvent.setup();
+    renderApp("/work");
+
+    await screen.findByRole("heading", { name: "My work" });
+    await user.selectOptions(screen.getByLabelText("Activity type"), "meeting");
+    await user.type(screen.getByLabelText("Subject"), "Kickoff confirmed");
+    await user.selectOptions(screen.getAllByLabelText("Company")[1], "company-1");
+    await user.click(screen.getByRole("button", { name: "Log activity" }));
+
+    expect(await screen.findByText("Kickoff confirmed")).toBeInTheDocument();
+  });
+
+  test("creates a follow-up task from the work area", async () => {
+    installApiMock(createStore({ authSession: demoSession }));
+    const user = userEvent.setup();
+    renderApp("/work");
+
+    await screen.findByRole("heading", { name: "My work" });
+    await user.type(screen.getByLabelText("Task"), "Book proposal review");
+    await user.selectOptions(screen.getAllByLabelText("Company")[0], "company-1");
+    await user.click(screen.getByRole("button", { name: "Create task" }));
+
+    expect(await screen.findByText("Book proposal review")).toBeInTheDocument();
   });
 
   test("logs out and returns to the login screen", async () => {

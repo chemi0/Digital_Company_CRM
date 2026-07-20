@@ -4,6 +4,8 @@ import cors from "cors";
 import express from "express";
 import { authRouter } from "./routes/auth-routes.js";
 import { companyContactRouter } from "./routes/company-contact-routes.js";
+import { dealRouter } from "./routes/deal-routes.js";
+import { workRouter } from "./routes/work-routes.js";
 import { env } from "./lib/env.js";
 import { prisma } from "./lib/prisma.js";
 
@@ -20,13 +22,18 @@ export function createApp() {
   app.use(express.json());
   app.use(authRouter);
   app.use(companyContactRouter);
+  app.use(dealRouter);
+  app.use(workRouter);
 
   app.get("/api/health", async (_request, response) => {
-    const [organizations, users, companies, contacts] = await prisma.$transaction([
+    const [organizations, users, companies, contacts, deals, activities, tasks] = await prisma.$transaction([
       prisma.organization.count(),
       prisma.user.count(),
       prisma.company.count(),
       prisma.contact.count(),
+      prisma.deal.count(),
+      prisma.activity.count(),
+      prisma.task.count(),
     ]);
 
     response.json({
@@ -39,6 +46,9 @@ export function createApp() {
         users,
         companies,
         contacts,
+        deals,
+        activities,
+        tasks,
       },
     });
   });

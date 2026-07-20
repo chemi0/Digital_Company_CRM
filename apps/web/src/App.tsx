@@ -5,12 +5,22 @@ import type {
   ContactCompany,
   ContactFormValues,
   ContactSummary,
+  DealFormValues,
+  DealSummary,
+  ActivityFormValues,
+  ActivitySummary,
+  TaskFormValues,
+  TaskSummary,
   LoginCredentials,
 } from "@agency-crm/shared";
 import type { ReactNode } from "react";
 import { useState } from "react";
 import {
   Building2,
+  CalendarDays,
+  Check,
+  CheckSquare,
+  CircleDollarSign,
   Globe,
   Mail,
   Phone,
@@ -23,21 +33,35 @@ import { Link, Navigate, Outlet, Route, Routes, useLocation, useNavigate, usePar
 import { Button } from "@/components/ui/button";
 import { CompanyForm } from "@/components/company-form";
 import { ContactForm } from "@/components/contact-form";
+import { DealForm } from "@/components/deal-form";
+import { ActivityForm } from "@/components/activity-form";
+import { TaskForm } from "@/components/task-form";
 import { CrmShell, SectionCard } from "@/components/crm-shell";
 import { LoginForm } from "@/components/login-form";
 import { ApiError } from "@/lib/api-client";
 import { useAuth } from "@/lib/auth-context";
 import {
   archiveContact,
+  archiveDeal,
+  archiveTask,
+  createActivity,
+  createTask,
   createCompany,
   createContact,
+  createDeal,
   getCompany,
   getContact,
+  getDeal,
   listCompanies,
   listContacts,
+  listDeals,
+  listActivities,
+  listTasks,
   listTeamMembers,
   updateCompany,
   updateContact,
+  updateDeal,
+  updateTask,
 } from "@/lib/crm-api";
 import { cn } from "@/lib/utils";
 
@@ -46,6 +70,14 @@ const queryKeys = {
   company: (companyId: string) => ["company", companyId] as const,
   contacts: ["contacts"] as const,
   contact: (contactId: string) => ["contact", contactId] as const,
+  deals: ["deals"] as const,
+  deal: (dealId: string) => ["deal", dealId] as const,
+  activities: ["activities"] as const,
+  tasks: ["tasks"] as const,
+  companyActivities: (companyId: string) => ["activities", "company", companyId] as const,
+  companyTasks: (companyId: string) => ["tasks", "company", companyId] as const,
+  dealActivities: (dealId: string) => ["activities", "deal", dealId] as const,
+  dealTasks: (dealId: string) => ["tasks", "deal", dealId] as const,
   teamMembers: ["team-members"] as const,
 };
 
@@ -66,6 +98,9 @@ function App() {
         <Route path="/companies/:companyId" element={<CompanyDetailPage />} />
         <Route path="/contacts" element={<ContactsPage />} />
         <Route path="/contacts/:contactId" element={<ContactDetailPage />} />
+        <Route path="/deals" element={<DealsPage />} />
+        <Route path="/deals/:dealId" element={<DealDetailPage />} />
+        <Route path="/work" element={<WorkPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
@@ -258,6 +293,16 @@ function CompanyDetailPage() {
   });
 
   const company = companyQuery.data;
+  const companyActivitiesQuery = useQuery({
+    queryKey: queryKeys.companyActivities(companyId),
+    queryFn: () => listActivities({ companyId }),
+    enabled: companyId.length > 0,
+  });
+  const companyTasksQuery = useQuery({
+    queryKey: queryKeys.companyTasks(companyId),
+    queryFn: () => listTasks({ companyId, scope: "all", status: "open" }),
+    enabled: companyId.length > 0,
+  });
 
   return (
     <CrmShell
@@ -317,6 +362,7 @@ function CompanyDetailPage() {
                   )}
                 </div>
               </div>
+              <WorkSnapshot activities={companyActivitiesQuery.data ?? []} tasks={companyTasksQuery.data ?? []} />
             </SectionCard>
 
             <SectionCard title="Edit company" description="Update the company using the current PATCH endpoint.">
@@ -504,6 +550,258 @@ function ContactDetailPage() {
   );
 }
 
+function DealsPage() {
+  const queryClient = useQueryClient();
+  const { session } = useAuth();
+  const canAssignOwner = session?.membership.role !== "sales_rep";
+  const dealsQuery = useQuery({ queryKey: queryKeys.deals, queryFn: listDeals });
+  const companiesQuery = useQuery({ queryKey: queryKeys.companies, queryFn: listCompanies });
+  const contactsQuery = useQuery({ queryKey: queryKeys.contacts, queryFn: listContacts });
+  const teamMembersQuery = useQuery({
+    queryKey: queryKeys.teamMembers,
+    queryFn: listTeamMembers,
+    enabled: canAssignOwner,
+  });
+  const createDealMutation = useMutation({
+    mutationFn: (values: DealFormValues) => createDeal(values),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: queryKeys.deals });
+    },
+  });
+
+  const companyOptions = (companiesQuery.data ?? []).map<ContactCompany>((company) => ({
+    id: company.id,
+    name: company.name,
+  }));
+
+  return (
+    <CrmShell
+      title="Deals"
+      eyebrow="Revenue pipeline"
+      actions={
+        <div className="hidden rounded-full border border-amber-200 bg-amber-50 px-4 py-2 text-sm font-medium text-amber-800 md:inline-flex">
+          <CircleDollarSign className="mr-2 size-4" />
+          Live pipeline value
+        </div>
+      }
+    >
+      <div className="grid gap-6 xl:grid-cols-[1.45fr_0.95fr]">
+        <SectionCard title="Pipeline" description="Active commercial opportunities available to your role.">
+          <DataState
+            isLoading={dealsQuery.isLoading}
+            error={dealsQuery.error}
+            empty={!dealsQuery.data?.length}
+            emptyLabel="No active deals yet"
+          >
+            <div className="grid gap-3">
+              {dealsQuery.data?.map((deal) => <DealRow key={deal.id} deal={deal} />)}
+            </div>
+          </DataState>
+        </SectionCard>
+
+        <SectionCard title="Add deal" description="Create a revenue opportunity for a company you can access.">
+          <DealForm
+            companies={companyOptions}
+            contacts={contactsQuery.data ?? []}
+            owners={teamMembersQuery.data}
+            canAssignOwner={canAssignOwner}
+            submitLabel="Create deal"
+            onSubmit={async (values) => {
+              await createDealMutation.mutateAsync(values);
+            }}
+          />
+        </SectionCard>
+      </div>
+    </CrmShell>
+  );
+}
+
+function DealDetailPage() {
+  const queryClient = useQueryClient();
+  const navigate = useNavigate();
+  const { session } = useAuth();
+  const canAssignOwner = session?.membership.role !== "sales_rep";
+  const dealId = useParams().dealId ?? "";
+  const dealQuery = useQuery({
+    queryKey: queryKeys.deal(dealId),
+    queryFn: () => getDeal(dealId),
+    enabled: dealId.length > 0,
+  });
+  const companiesQuery = useQuery({ queryKey: queryKeys.companies, queryFn: listCompanies });
+  const contactsQuery = useQuery({ queryKey: queryKeys.contacts, queryFn: listContacts });
+  const teamMembersQuery = useQuery({
+    queryKey: queryKeys.teamMembers,
+    queryFn: listTeamMembers,
+    enabled: canAssignOwner,
+  });
+  const updateDealMutation = useMutation({
+    mutationFn: (values: DealFormValues) => updateDeal(dealId, values),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.deal(dealId) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.deals }),
+      ]);
+    },
+  });
+  const archiveDealMutation = useMutation({
+    mutationFn: () => archiveDeal(dealId),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: queryKeys.deals });
+      navigate("/deals");
+    },
+  });
+
+  const deal = dealQuery.data;
+  const dealActivitiesQuery = useQuery({
+    queryKey: queryKeys.dealActivities(dealId),
+    queryFn: () => listActivities({ dealId }),
+    enabled: dealId.length > 0,
+  });
+  const dealTasksQuery = useQuery({
+    queryKey: queryKeys.dealTasks(dealId),
+    queryFn: () => listTasks({ dealId, scope: "all", status: "open" }),
+    enabled: dealId.length > 0,
+  });
+  const companyOptions = (companiesQuery.data ?? []).map<ContactCompany>((company) => ({
+    id: company.id,
+    name: company.name,
+  }));
+
+  return (
+    <CrmShell
+      title={deal?.title ?? "Deal details"}
+      eyebrow="Revenue opportunity"
+      backTo="/deals"
+      backLabel="Back to deals"
+      actions={
+        deal ? (
+          <Button
+            variant="destructive"
+            size="lg"
+            onClick={() => archiveDealMutation.mutate()}
+            disabled={archiveDealMutation.isPending}
+          >
+            Archive deal
+          </Button>
+        ) : null
+      }
+    >
+      <DataState
+        isLoading={dealQuery.isLoading}
+        error={dealQuery.error}
+        empty={!deal}
+        emptyLabel="Deal not found"
+      >
+        {deal ? (
+          <div className="grid gap-6 xl:grid-cols-[1.05fr_0.95fr]">
+            <SectionCard title="Opportunity snapshot" description="Current deal context returned by the protected API.">
+              <dl className="grid gap-4 md:grid-cols-2">
+                <Metric label="Stage" value={formatDealStage(deal.stage)} icon={<CircleDollarSign className="size-4" />} />
+                <Metric label="Value" value={formatMoney(deal.amountCents, deal.currency)} icon={<CircleDollarSign className="size-4" />} />
+                <Metric label="Company" value={deal.company.name} icon={<Building2 className="size-4" />} />
+                <Metric
+                  label="Primary contact"
+                  value={deal.primaryContact ? `${deal.primaryContact.firstName} ${deal.primaryContact.lastName}` : "Not set"}
+                  icon={<UserRoundCheck className="size-4" />}
+                />
+                <Metric
+                  label="Expected close"
+                  value={deal.expectedCloseDate ? formatDate(deal.expectedCloseDate) : "Not set"}
+                  icon={<CalendarDays className="size-4" />}
+                />
+                <Metric
+                  label="Deal owner"
+                  value={`${deal.owner.user.firstName} ${deal.owner.user.lastName}`}
+                  icon={<UserRoundCheck className="size-4" />}
+                />
+              </dl>
+              {deal.source || deal.description ? (
+                <div className="mt-6 rounded-3xl border border-slate-200 bg-slate-50 p-4">
+                  {deal.source ? <p className="text-sm font-medium text-slate-600">Source: {deal.source}</p> : null}
+                  {deal.description ? <p className="mt-2 text-sm leading-6 text-slate-600">{deal.description}</p> : null}
+                </div>
+              ) : null}
+              <WorkSnapshot activities={dealActivitiesQuery.data ?? []} tasks={dealTasksQuery.data ?? []} />
+            </SectionCard>
+
+            <SectionCard title="Edit deal" description="Move the opportunity forward or adjust its commercial context.">
+              <DealForm
+                companies={companyOptions}
+                contacts={contactsQuery.data ?? []}
+                owners={teamMembersQuery.data}
+                canAssignOwner={canAssignOwner}
+                initialValues={deal}
+                submitLabel="Save deal"
+                onSubmit={async (values) => {
+                  await updateDealMutation.mutateAsync(values);
+                }}
+              />
+            </SectionCard>
+          </div>
+        ) : null}
+      </DataState>
+    </CrmShell>
+  );
+}
+
+function WorkPage() {
+  const queryClient = useQueryClient();
+  const { session } = useAuth();
+  const canAssignOwner = session?.membership.role !== "sales_rep";
+  const tasksQuery = useQuery({ queryKey: queryKeys.tasks, queryFn: () => listTasks({ scope: "mine", status: "open" }) });
+  const activitiesQuery = useQuery({ queryKey: queryKeys.activities, queryFn: () => listActivities() });
+  const companiesQuery = useQuery({ queryKey: queryKeys.companies, queryFn: listCompanies });
+  const contactsQuery = useQuery({ queryKey: queryKeys.contacts, queryFn: listContacts });
+  const dealsQuery = useQuery({ queryKey: queryKeys.deals, queryFn: listDeals });
+  const teamMembersQuery = useQuery({ queryKey: queryKeys.teamMembers, queryFn: listTeamMembers, enabled: canAssignOwner });
+  const completeTaskMutation = useMutation({
+    mutationFn: (taskId: string) => updateTask(taskId, { completed: true }),
+    onSuccess: async () => { await queryClient.invalidateQueries({ queryKey: queryKeys.tasks }); },
+  });
+  const archiveTaskMutation = useMutation({
+    mutationFn: (taskId: string) => archiveTask(taskId),
+    onSuccess: async () => { await queryClient.invalidateQueries({ queryKey: queryKeys.tasks }); },
+  });
+  const createTaskMutation = useMutation({
+    mutationFn: (values: TaskFormValues) => createTask(values),
+    onSuccess: async () => { await queryClient.invalidateQueries({ queryKey: queryKeys.tasks }); },
+  });
+  const createActivityMutation = useMutation({
+    mutationFn: (values: ActivityFormValues) => createActivity(values),
+    onSuccess: async () => { await queryClient.invalidateQueries({ queryKey: queryKeys.activities }); },
+  });
+  const companyOptions = (companiesQuery.data ?? []).map<ContactCompany>((company) => ({ id: company.id, name: company.name }));
+
+  return (
+    <CrmShell title="My work" eyebrow="Follow-through" actions={<div className="hidden rounded-full border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-medium text-emerald-800 md:inline-flex"><CheckSquare className="mr-2 size-4" />Focus on the next action</div>}>
+      <div className="grid gap-6 xl:grid-cols-[1.35fr_0.95fr]">
+        <SectionCard title="Open tasks" description="Your active follow-ups, ordered by due date.">
+          <DataState isLoading={tasksQuery.isLoading} error={tasksQuery.error} empty={!tasksQuery.data?.length} emptyLabel="No open tasks assigned to you">
+            <div className="grid gap-3">{tasksQuery.data?.map((task) => <TaskRow key={task.id} task={task} onComplete={() => completeTaskMutation.mutate(task.id)} onArchive={() => archiveTaskMutation.mutate(task.id)} />)}</div>
+          </DataState>
+        </SectionCard>
+        <SectionCard title="Add follow-up" description="Turn account context into a clear, assigned next step.">
+          <TaskForm companies={companyOptions} contacts={contactsQuery.data ?? []} deals={dealsQuery.data ?? []} owners={teamMembersQuery.data} canAssignOwner={canAssignOwner} submitLabel="Create task" onSubmit={async (values) => { await createTaskMutation.mutateAsync(values); }} />
+        </SectionCard>
+      </div>
+      <div className="grid gap-6 xl:grid-cols-[1.35fr_0.95fr]">
+        <SectionCard title="Recent activity" description="The latest customer interactions your role can access.">
+          <DataState isLoading={activitiesQuery.isLoading} error={activitiesQuery.error} empty={!activitiesQuery.data?.length} emptyLabel="No activity has been logged yet">
+            <div className="grid gap-3">{activitiesQuery.data?.map((activity) => <ActivityRow key={activity.id} activity={activity} />)}</div>
+          </DataState>
+        </SectionCard>
+        <SectionCard title="Log activity" description="Capture a call, email, meeting, or internal note while the context is fresh.">
+          <ActivityForm companies={companyOptions} contacts={contactsQuery.data ?? []} deals={dealsQuery.data ?? []} submitLabel="Log activity" onSubmit={async (values) => { await createActivityMutation.mutateAsync(values); }} />
+        </SectionCard>
+      </div>
+    </CrmShell>
+  );
+}
+
+function WorkSnapshot({ activities, tasks }: { activities: ActivitySummary[]; tasks: TaskSummary[] }) {
+  return <div className="mt-6 rounded-3xl border border-slate-200 bg-slate-50 p-4"><div className="flex items-center justify-between gap-3"><div><p className="text-sm font-semibold text-slate-900">Related work</p><p className="mt-1 text-sm text-slate-500">{tasks.length} open task{tasks.length === 1 ? "" : "s"} · {activities.length} activity record{activities.length === 1 ? "" : "s"}</p></div><Button asChild variant="outline" size="sm"><Link to="/work">Open work</Link></Button></div>{tasks[0] ? <p className="mt-4 rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-600">Next: <span className="font-semibold text-slate-900">{tasks[0].title}</span></p> : null}{activities[0] ? <p className="mt-2 text-sm text-slate-500">Latest activity: {activities[0].subject}</p> : null}</div>;
+}
+
 function CompanyRow({ company }: { company: CompanySummary }) {
   return (
     <Link
@@ -576,6 +874,43 @@ function ContactRow({ contact }: { contact: ContactSummary }) {
   );
 }
 
+function DealRow({ deal }: { deal: DealSummary }) {
+  return (
+    <Link
+      to={`/deals/${deal.id}`}
+      className="group grid gap-3 rounded-[26px] border border-slate-200 bg-slate-50 px-4 py-4 transition hover:border-slate-300 hover:bg-white md:grid-cols-[1.15fr_0.7fr_0.75fr_auto]"
+    >
+      <div className="space-y-1">
+        <p className="font-semibold text-slate-950">{deal.title}</p>
+        <p className="text-sm text-slate-500">{deal.company.name}</p>
+      </div>
+      <div className="space-y-1">
+        <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Value</p>
+        <p className="text-sm font-semibold text-slate-800">{formatMoney(deal.amountCents, deal.currency)}</p>
+      </div>
+      <div className="space-y-1">
+        <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Owner</p>
+        <p className="text-sm text-slate-700">{deal.owner.user.firstName} {deal.owner.user.lastName}</p>
+      </div>
+      <div className="flex flex-col items-start gap-2 md:items-end">
+        <DealStagePill stage={deal.stage} />
+        <p className="text-sm text-slate-500">{deal.expectedCloseDate ? formatDate(deal.expectedCloseDate) : "No close date"}</p>
+      </div>
+    </Link>
+  );
+}
+
+function TaskRow({ task, onComplete, onArchive }: { task: TaskSummary; onComplete: () => void; onArchive: () => void }) {
+  return <div className="grid gap-3 rounded-[26px] border border-slate-200 bg-slate-50 px-4 py-4 md:grid-cols-[1fr_auto]">
+    <div className="space-y-1"><div className="flex flex-wrap items-center gap-2"><p className="font-semibold text-slate-950">{task.title}</p><PriorityPill priority={task.priority} /></div><p className="text-sm text-slate-600">{task.company.name}{task.deal ? ` · ${task.deal.title}` : ""}</p>{task.description ? <p className="text-sm text-slate-500">{task.description}</p> : null}<p className="text-xs font-medium uppercase tracking-[0.16em] text-slate-400">{task.dueAt ? `Due ${formatDate(task.dueAt)}` : "No due date"}</p></div>
+    <div className="flex items-start gap-2"><Button type="button" variant="outline" size="sm" onClick={onComplete}><Check className="size-4" />Complete</Button><Button type="button" variant="ghost" size="sm" onClick={onArchive}>Archive</Button></div>
+  </div>;
+}
+
+function ActivityRow({ activity }: { activity: ActivitySummary }) {
+  return <div className="rounded-[26px] border border-slate-200 bg-slate-50 px-4 py-4"><div className="flex flex-wrap items-center justify-between gap-3"><div><p className="font-semibold text-slate-950">{activity.subject}</p><p className="mt-1 text-sm text-slate-600">{formatActivityType(activity.type)} · {activity.company.name}{activity.contact ? ` · ${activity.contact.firstName} ${activity.contact.lastName}` : ""}</p></div><p className="text-xs font-medium uppercase tracking-[0.16em] text-slate-400">{formatDate(activity.occurredAt)}</p></div>{activity.body ? <p className="mt-3 text-sm leading-6 text-slate-500">{activity.body}</p> : null}<p className="mt-3 text-xs font-medium text-slate-400">Logged by {activity.author.user.firstName} {activity.author.user.lastName}</p></div>;
+}
+
 function StatusPill({ status }: { status: CompanySummary["status"] }) {
   return (
     <span
@@ -589,6 +924,28 @@ function StatusPill({ status }: { status: CompanySummary["status"] }) {
       {formatStatus(status)}
     </span>
   );
+}
+
+function DealStagePill({ stage }: { stage: DealSummary["stage"] }) {
+  return (
+    <span
+      className={cn(
+        "rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em]",
+        stage === "new_lead" && "bg-slate-200 text-slate-700",
+        stage === "contacted" && "bg-sky-100 text-sky-700",
+        stage === "qualified" && "bg-violet-100 text-violet-700",
+        stage === "proposal_sent" && "bg-amber-100 text-amber-800",
+        stage === "won" && "bg-emerald-100 text-emerald-700",
+        stage === "lost" && "bg-rose-100 text-rose-700",
+      )}
+    >
+      {formatDealStage(stage)}
+    </span>
+  );
+}
+
+function PriorityPill({ priority }: { priority: TaskSummary["priority"] }) {
+  return <span className={cn("rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em]", priority === "high" && "bg-rose-100 text-rose-700", priority === "medium" && "bg-amber-100 text-amber-800", priority === "low" && "bg-slate-200 text-slate-600")}>{priority}</span>;
 }
 
 function Metric({ label, value, icon }: { label: string; value: string; icon: ReactNode }) {
@@ -667,6 +1024,43 @@ function formatStatus(status: CompanySummary["status"]) {
 
 function formatContactCount(contactCount: number) {
   return `${contactCount} contact${contactCount === 1 ? "" : "s"}`;
+}
+
+function formatDealStage(stage: DealSummary["stage"]) {
+  switch (stage) {
+    case "new_lead":
+      return "New lead";
+    case "contacted":
+      return "Contacted";
+    case "qualified":
+      return "Qualified";
+    case "proposal_sent":
+      return "Proposal sent";
+    case "won":
+      return "Won";
+    case "lost":
+      return "Lost";
+  }
+}
+
+function formatMoney(amountCents: number, currency: string) {
+  return new Intl.NumberFormat("en-IE", {
+    style: "currency",
+    currency,
+    minimumFractionDigits: 2,
+  }).format(amountCents / 100);
+}
+
+function formatDate(value: string | Date) {
+  return new Intl.DateTimeFormat("en-GB", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+  }).format(new Date(value));
+}
+
+function formatActivityType(type: ActivitySummary["type"]) {
+  return type[0].toUpperCase() + type.slice(1);
 }
 
 export default App;

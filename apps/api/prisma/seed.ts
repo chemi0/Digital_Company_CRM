@@ -158,7 +158,7 @@ async function main() {
     },
   });
 
-  await prisma.company.upsert({
+  const borealCompany = await prisma.company.upsert({
     where: {
       organizationId_name: {
         organizationId: organization.id,
@@ -184,7 +184,7 @@ async function main() {
     },
   });
 
-  await prisma.contact.upsert({
+  const acmeContact = await prisma.contact.upsert({
     where: { id: "seed-contact-acme-primary" },
     update: {
       organizationId: organization.id,
@@ -210,6 +210,214 @@ async function main() {
     },
   });
 
+  const borealContact = await prisma.contact.upsert({
+    where: { id: "seed-contact-boreal-primary" },
+    update: {
+      organizationId: organization.id,
+      companyId: borealCompany.id,
+      firstName: "Luka",
+      lastName: "Petrovic",
+      email: "luka@boreal-growth.example",
+      phone: "+38160123457",
+      jobTitle: "Growth Lead",
+      isPrimary: true,
+      archivedAt: null,
+    },
+    create: {
+      id: "seed-contact-boreal-primary",
+      organizationId: organization.id,
+      companyId: borealCompany.id,
+      firstName: "Luka",
+      lastName: "Petrovic",
+      email: "luka@boreal-growth.example",
+      phone: "+38160123457",
+      jobTitle: "Growth Lead",
+      isPrimary: true,
+    },
+  });
+
+  await prisma.deal.upsert({
+    where: { id: "seed-deal-acme-retainer" },
+    update: {
+      organizationId: organization.id,
+      companyId: company.id,
+      primaryContactId: acmeContact.id,
+      ownerMembershipId: salesRepMembership.id,
+      title: "Website support retainer",
+      stage: "PROPOSAL_SENT",
+      amountCents: 180000,
+      currency: "EUR",
+      source: "Referral",
+      expectedCloseDate: new Date("2026-08-15T00:00:00.000Z"),
+      description: "Monthly website strategy, design support, and delivery retainership.",
+      archivedAt: null,
+    },
+    create: {
+      id: "seed-deal-acme-retainer",
+      organizationId: organization.id,
+      companyId: company.id,
+      primaryContactId: acmeContact.id,
+      ownerMembershipId: salesRepMembership.id,
+      title: "Website support retainer",
+      stage: "PROPOSAL_SENT",
+      amountCents: 180000,
+      currency: "EUR",
+      source: "Referral",
+      expectedCloseDate: new Date("2026-08-15T00:00:00.000Z"),
+      description: "Monthly website strategy, design support, and delivery retainership.",
+    },
+  });
+
+  await prisma.activity.upsert({
+    where: { id: "seed-activity-acme-discovery" },
+    update: {
+      organizationId: organization.id,
+      companyId: company.id,
+      contactId: acmeContact.id,
+      dealId: "seed-deal-acme-retainer",
+      authorMembershipId: salesRepMembership.id,
+      type: "CALL",
+      subject: "Retainer discovery call",
+      body: "Confirmed the support scope and next review date with the creative team.",
+      occurredAt: new Date("2026-07-14T10:30:00.000Z"),
+      archivedAt: null,
+    },
+    create: {
+      id: "seed-activity-acme-discovery",
+      organizationId: organization.id,
+      companyId: company.id,
+      contactId: acmeContact.id,
+      dealId: "seed-deal-acme-retainer",
+      authorMembershipId: salesRepMembership.id,
+      type: "CALL",
+      subject: "Retainer discovery call",
+      body: "Confirmed the support scope and next review date with the creative team.",
+      occurredAt: new Date("2026-07-14T10:30:00.000Z"),
+    },
+  });
+
+  await prisma.activity.upsert({
+    where: { id: "seed-activity-boreal-review" },
+    update: {
+      organizationId: organization.id,
+      companyId: borealCompany.id,
+      contactId: borealContact.id,
+      dealId: "seed-deal-boreal-growth",
+      authorMembershipId: managerMembership.id,
+      type: "MEETING",
+      subject: "Campaign planning review",
+      body: "Aligned on the launch sequence, reporting cadence, and stakeholder approvals.",
+      occurredAt: new Date("2026-07-15T13:00:00.000Z"),
+      archivedAt: null,
+    },
+    create: {
+      id: "seed-activity-boreal-review",
+      organizationId: organization.id,
+      companyId: borealCompany.id,
+      contactId: borealContact.id,
+      dealId: "seed-deal-boreal-growth",
+      authorMembershipId: managerMembership.id,
+      type: "MEETING",
+      subject: "Campaign planning review",
+      body: "Aligned on the launch sequence, reporting cadence, and stakeholder approvals.",
+      occurredAt: new Date("2026-07-15T13:00:00.000Z"),
+    },
+  });
+
+  await prisma.task.upsert({
+    where: { id: "seed-task-acme-proposal" },
+    update: {
+      organizationId: organization.id,
+      companyId: company.id,
+      contactId: acmeContact.id,
+      dealId: "seed-deal-acme-retainer",
+      assigneeMembershipId: salesRepMembership.id,
+      createdByMembershipId: managerMembership.id,
+      title: "Send the retainer proposal",
+      description: "Include the agreed support scope and monthly delivery cadence.",
+      priority: "HIGH",
+      dueAt: new Date("2026-07-22T00:00:00.000Z"),
+      completedAt: null,
+      archivedAt: null,
+    },
+    create: {
+      id: "seed-task-acme-proposal",
+      organizationId: organization.id,
+      companyId: company.id,
+      contactId: acmeContact.id,
+      dealId: "seed-deal-acme-retainer",
+      assigneeMembershipId: salesRepMembership.id,
+      createdByMembershipId: managerMembership.id,
+      title: "Send the retainer proposal",
+      description: "Include the agreed support scope and monthly delivery cadence.",
+      priority: "HIGH",
+      dueAt: new Date("2026-07-22T00:00:00.000Z"),
+    },
+  });
+
+  await prisma.task.upsert({
+    where: { id: "seed-task-boreal-brief" },
+    update: {
+      organizationId: organization.id,
+      companyId: borealCompany.id,
+      contactId: borealContact.id,
+      dealId: "seed-deal-boreal-growth",
+      assigneeMembershipId: managerMembership.id,
+      createdByMembershipId: adminMembership.id,
+      title: "Prepare launch brief",
+      description: "Prepare the final kickoff brief for the growth campaign team.",
+      priority: "MEDIUM",
+      dueAt: new Date("2026-07-25T00:00:00.000Z"),
+      completedAt: null,
+      archivedAt: null,
+    },
+    create: {
+      id: "seed-task-boreal-brief",
+      organizationId: organization.id,
+      companyId: borealCompany.id,
+      contactId: borealContact.id,
+      dealId: "seed-deal-boreal-growth",
+      assigneeMembershipId: managerMembership.id,
+      createdByMembershipId: adminMembership.id,
+      title: "Prepare launch brief",
+      description: "Prepare the final kickoff brief for the growth campaign team.",
+      priority: "MEDIUM",
+      dueAt: new Date("2026-07-25T00:00:00.000Z"),
+    },
+  });
+
+  await prisma.deal.upsert({
+    where: { id: "seed-deal-boreal-growth" },
+    update: {
+      organizationId: organization.id,
+      companyId: borealCompany.id,
+      primaryContactId: borealContact.id,
+      ownerMembershipId: managerMembership.id,
+      title: "Growth campaign launch",
+      stage: "QUALIFIED",
+      amountCents: 950000,
+      currency: "EUR",
+      source: "Inbound",
+      expectedCloseDate: new Date("2026-09-30T00:00:00.000Z"),
+      description: "Cross-channel launch campaign for the next growth cycle.",
+      archivedAt: null,
+    },
+    create: {
+      id: "seed-deal-boreal-growth",
+      organizationId: organization.id,
+      companyId: borealCompany.id,
+      primaryContactId: borealContact.id,
+      ownerMembershipId: managerMembership.id,
+      title: "Growth campaign launch",
+      stage: "QUALIFIED",
+      amountCents: 950000,
+      currency: "EUR",
+      source: "Inbound",
+      expectedCloseDate: new Date("2026-09-30T00:00:00.000Z"),
+      description: "Cross-channel launch campaign for the next growth cycle.",
+    },
+  });
+
   await prisma.invitation.upsert({
     where: { tokenHash: "seed-invite-token-hash" },
     update: {
@@ -230,7 +438,7 @@ async function main() {
     },
   });
 
-  const [organizations, users, memberships, invitations, companies, contacts] =
+  const [organizations, users, memberships, invitations, companies, contacts, deals, activities, tasks] =
     await prisma.$transaction([
       prisma.organization.count(),
       prisma.user.count(),
@@ -238,6 +446,9 @@ async function main() {
       prisma.invitation.count(),
       prisma.company.count(),
       prisma.contact.count(),
+      prisma.deal.count(),
+      prisma.activity.count(),
+      prisma.task.count(),
     ]);
 
   console.log({
@@ -254,6 +465,9 @@ async function main() {
       invitations,
       companies,
       contacts,
+      deals,
+      activities,
+      tasks,
     },
   });
 }

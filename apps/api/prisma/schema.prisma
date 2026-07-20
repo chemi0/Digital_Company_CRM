@@ -19,6 +19,28 @@ enum CompanyStatus {
   INACTIVE
 }
 
+enum DealStage {
+  NEW_LEAD
+  CONTACTED
+  QUALIFIED
+  PROPOSAL_SENT
+  WON
+  LOST
+}
+
+enum ActivityType {
+  CALL
+  EMAIL
+  MEETING
+  NOTE
+}
+
+enum TaskPriority {
+  LOW
+  MEDIUM
+  HIGH
+}
+
 model Organization {
   id          String       @id @default(cuid())
   name        String
@@ -30,6 +52,9 @@ model Organization {
   invitations Invitation[]
   companies   Company[]
   contacts    Contact[]
+  deals       Deal[]
+  activities  Activity[]
+  tasks       Task[]
 }
 
 model User {
@@ -74,6 +99,10 @@ model Membership {
   organization   Organization   @relation(fields: [organizationId], references: [id])
   user           User           @relation(fields: [userId], references: [id])
   ownedCompanies Company[]      @relation("CompanyOwner")
+  ownedDeals     Deal[]         @relation("DealOwner")
+  authoredActivities Activity[] @relation("ActivityAuthor")
+  assignedTasks  Task[]         @relation("TaskAssignee")
+  createdTasks   Task[]         @relation("TaskCreator")
 
   @@unique([organizationId, userId])
 }
@@ -108,6 +137,9 @@ model Company {
   organization   Organization  @relation(fields: [organizationId], references: [id])
   ownerMembership Membership   @relation("CompanyOwner", fields: [ownerMembershipId], references: [id])
   contacts       Contact[]
+  deals          Deal[]
+  activities     Activity[]
+  tasks          Task[]
 
   @@unique([organizationId, name])
   @@index([organizationId])
@@ -129,7 +161,96 @@ model Contact {
   archivedAt     DateTime?
   organization   Organization @relation(fields: [organizationId], references: [id])
   company        Company      @relation(fields: [companyId], references: [id])
+  primaryDeals   Deal[]       @relation("DealPrimaryContact")
+  activities     Activity[]
+  tasks          Task[]
 
   @@index([organizationId])
   @@index([companyId])
+}
+
+model Deal {
+  id                 String       @id @default(cuid())
+  organizationId     String
+  companyId          String
+  primaryContactId   String?
+  ownerMembershipId  String
+  title              String
+  stage              DealStage    @default(NEW_LEAD)
+  amountCents        Int          @default(0)
+  currency           String       @default("EUR")
+  source             String?
+  expectedCloseDate  DateTime?
+  description        String?
+  createdAt          DateTime     @default(now())
+  updatedAt          DateTime     @updatedAt
+  archivedAt         DateTime?
+  organization       Organization @relation(fields: [organizationId], references: [id])
+  company            Company      @relation(fields: [companyId], references: [id])
+  primaryContact     Contact?     @relation("DealPrimaryContact", fields: [primaryContactId], references: [id])
+  ownerMembership    Membership   @relation("DealOwner", fields: [ownerMembershipId], references: [id])
+  activities         Activity[]
+  tasks              Task[]
+
+  @@index([organizationId, stage])
+  @@index([ownerMembershipId])
+  @@index([companyId])
+  @@index([primaryContactId])
+}
+
+model Activity {
+  id                 String       @id @default(cuid())
+  organizationId     String
+  companyId          String
+  contactId          String?
+  dealId             String?
+  authorMembershipId String
+  type               ActivityType
+  subject            String
+  body               String?
+  occurredAt         DateTime     @default(now())
+  createdAt          DateTime     @default(now())
+  updatedAt          DateTime     @updatedAt
+  archivedAt         DateTime?
+  organization       Organization @relation(fields: [organizationId], references: [id])
+  company            Company      @relation(fields: [companyId], references: [id])
+  contact            Contact?     @relation(fields: [contactId], references: [id])
+  deal               Deal?        @relation(fields: [dealId], references: [id])
+  authorMembership   Membership   @relation("ActivityAuthor", fields: [authorMembershipId], references: [id])
+
+  @@index([organizationId, occurredAt])
+  @@index([companyId])
+  @@index([contactId])
+  @@index([dealId])
+  @@index([authorMembershipId])
+}
+
+model Task {
+  id                   String       @id @default(cuid())
+  organizationId       String
+  companyId            String
+  contactId            String?
+  dealId               String?
+  assigneeMembershipId String
+  createdByMembershipId String
+  title                String
+  description          String?
+  priority             TaskPriority @default(MEDIUM)
+  dueAt                DateTime?
+  completedAt          DateTime?
+  createdAt            DateTime     @default(now())
+  updatedAt            DateTime     @updatedAt
+  archivedAt           DateTime?
+  organization         Organization @relation(fields: [organizationId], references: [id])
+  company              Company      @relation(fields: [companyId], references: [id])
+  contact              Contact?     @relation(fields: [contactId], references: [id])
+  deal                 Deal?        @relation(fields: [dealId], references: [id])
+  assigneeMembership   Membership   @relation("TaskAssignee", fields: [assigneeMembershipId], references: [id])
+  createdByMembership  Membership   @relation("TaskCreator", fields: [createdByMembershipId], references: [id])
+
+  @@index([organizationId, completedAt, dueAt])
+  @@index([companyId])
+  @@index([contactId])
+  @@index([dealId])
+  @@index([assigneeMembershipId, completedAt, dueAt])
 }

@@ -1,4 +1,4 @@
-import { BriefcaseBusiness, Building2, ChevronLeft, LogOut, Menu, Users } from "lucide-react";
+import { BriefcaseBusiness, Building2, CheckSquare, ChevronLeft, Handshake, LogOut, Menu, Users } from "lucide-react";
 import type { PropsWithChildren, ReactNode } from "react";
 import { NavLink } from "react-router-dom";
 import { Button } from "@/components/ui/button";
@@ -23,6 +23,16 @@ const navItems = [
     to: "/contacts",
     label: "Contacts",
     icon: Users,
+  },
+  {
+    to: "/deals",
+    label: "Deals",
+    icon: Handshake,
+  },
+  {
+    to: "/work",
+    label: "Work",
+    icon: CheckSquare,
   },
 ];
 
