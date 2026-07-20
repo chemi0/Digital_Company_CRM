@@ -1,4 +1,4 @@
-import { BriefcaseBusiness, Building2, CheckSquare, ChevronLeft, Handshake, LogOut, Menu, Users } from "lucide-react";
+import { BriefcaseBusiness, Building2, CheckSquare, ChevronLeft, Handshake, LogOut, Menu, ShieldCheck, Users } from "lucide-react";
 import type { PropsWithChildren, ReactNode } from "react";
 import { NavLink } from "react-router-dom";
 import { Button } from "@/components/ui/button";
@@ -34,6 +34,12 @@ const navItems = [
     label: "Work",
     icon: CheckSquare,
   },
+  {
+    to: "/team",
+    label: "Team",
+    icon: ShieldCheck,
+    leadershipOnly: true,
+  },
 ];
 
 export function CrmShell({ title, eyebrow, backTo, backLabel, actions, children }: CrmShellProps) {
@@ -56,7 +62,7 @@ export function CrmShell({ title, eyebrow, backTo, backLabel, actions, children 
           </div>
 
           <nav className="grid gap-2">
-            {navItems.map(({ to, label, icon: Icon }) => (
+            {navItems.filter((item) => !item.leadershipOnly || session?.membership.role !== "sales_rep").map(({ to, label, icon: Icon }) => (
               <NavLink
                 key={to}
                 to={to}

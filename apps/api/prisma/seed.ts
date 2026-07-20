@@ -427,6 +427,7 @@ async function main() {
       invitedByUserId: adminUser.id,
       expiresAt: new Date("2030-01-01T00:00:00.000Z"),
       acceptedAt: null,
+      revokedAt: null,
     },
     create: {
       organizationId: organization.id,
@@ -435,6 +436,7 @@ async function main() {
       tokenHash: "seed-invite-token-hash",
       invitedByUserId: adminUser.id,
       expiresAt: new Date("2030-01-01T00:00:00.000Z"),
+      revokedAt: null,
     },
   });
 

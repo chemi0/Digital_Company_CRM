@@ -15,6 +15,7 @@ import {
 import { loadActiveAuthContextForUser } from "../lib/auth-context.js";
 import { requireAuth } from "../middleware/auth.js";
 import { prisma } from "../lib/prisma.js";
+import { hashInvitationToken } from "../lib/invitation-email.js";
 
 const router = Router();
 
@@ -22,6 +23,15 @@ const loginSchema = z.object({
   email: z.email(),
   password: z.string().min(1),
 });
+
+const acceptInvitationSchema = z.object({
+  token: z.string().min(32),
+  firstName: z.string().trim().min(1).max(80).optional(),
+  lastName: z.string().trim().min(1).max(80).optional(),
+  password: z.string().min(12).max(128).optional(),
+});
+
+const invitationPreviewSchema = z.object({ token: z.string().min(32) });
 
 async function buildSessionResponse(userId: string, sessionId: string) {
   const authContext = await loadActiveAuthContextForUser(userId);
@@ -127,6 +137,59 @@ router.post("/api/auth/login", async (request, response) => {
       membership: authContext.membership,
     },
   });
+});
+
+router.get("/api/auth/invitation-preview", async (request, response) => {
+  const parsed = invitationPreviewSchema.safeParse(request.query);
+  if (!parsed.success) return response.status(400).json({ error: "Invalid invitation link" });
+  const invitation = await prisma.invitation.findFirst({
+    where: { tokenHash: hashInvitationToken(parsed.data.token), acceptedAt: null, revokedAt: null, expiresAt: { gt: new Date() } },
+    include: { organization: { select: { name: true } } },
+  });
+  if (!invitation) return response.status(400).json({ error: "This invitation is invalid, expired, or already used" });
+
+  const existingUser = await prisma.user.findUnique({ where: { email: invitation.email }, select: { id: true } });
+  if (!existingUser) return response.json({ data: { mode: "new_account", organizationName: invitation.organization.name } });
+  const inactiveMembership = await prisma.membership.findFirst({ where: { organizationId: invitation.organizationId, userId: existingUser.id, archivedAt: { not: null } }, select: { id: true } });
+  if (!inactiveMembership) return response.status(400).json({ error: "This invitation cannot be used for an active account" });
+  return response.json({ data: { mode: "reactivation", organizationName: invitation.organization.name } });
+});
+
+router.post("/api/auth/accept-invitation", async (request, response) => {
+  const parsed = acceptInvitationSchema.safeParse(request.body);
+  if (!parsed.success) return response.status(400).json({ error: "Invalid invitation acceptance payload", details: parsed.error.flatten() });
+  const invitation = await prisma.invitation.findFirst({ where: { tokenHash: hashInvitationToken(parsed.data.token), acceptedAt: null, revokedAt: null, expiresAt: { gt: new Date() } } });
+  if (!invitation) return response.status(400).json({ error: "This invitation is invalid, expired, or already used" });
+  const existingUser = await prisma.user.findUnique({ where: { email: invitation.email } });
+  if (existingUser) {
+    const inactiveMembership = await prisma.membership.findFirst({ where: { organizationId: invitation.organizationId, userId: existingUser.id, archivedAt: { not: null } }, select: { id: true, role: true } });
+    if (!inactiveMembership) return response.status(409).json({ error: "This email already belongs to an active account" });
+    try {
+      const membership = await prisma.$transaction(async (transaction) => {
+        const restoredMembership = await transaction.membership.update({ where: { id: inactiveMembership.id }, data: { archivedAt: null }, select: { id: true, role: true } });
+        const accepted = await transaction.invitation.updateMany({ where: { id: invitation.id, acceptedAt: null, revokedAt: null }, data: { acceptedAt: new Date() } });
+        if (accepted.count !== 1) throw new Error("Invitation was already accepted");
+        return restoredMembership;
+      });
+      return response.json({ data: { membership: { id: membership.id, role: membership.role.toLowerCase(), reactivated: true } } });
+    } catch {
+      return response.status(400).json({ error: "This reactivation invitation could not be accepted" });
+    }
+  }
+  if (!parsed.data.firstName || !parsed.data.lastName || !parsed.data.password) return response.status(400).json({ error: "First name, last name, and password are required for a new account" });
+  const passwordHash = await bcrypt.hash(parsed.data.password, 12);
+  try {
+    const membership = await prisma.$transaction(async (transaction) => {
+      const user = await transaction.user.create({ data: { email: invitation.email, passwordHash, firstName: parsed.data.firstName!, lastName: parsed.data.lastName! } });
+      const createdMembership = await transaction.membership.create({ data: { organizationId: invitation.organizationId, userId: user.id, role: invitation.role }, select: { id: true, role: true } });
+      const accepted = await transaction.invitation.updateMany({ where: { id: invitation.id, acceptedAt: null, revokedAt: null }, data: { acceptedAt: new Date() } });
+      if (accepted.count !== 1) throw new Error("Invitation was already accepted");
+      return createdMembership;
+    });
+    return response.status(201).json({ data: { membership: { id: membership.id, role: membership.role.toLowerCase() } } });
+  } catch {
+    return response.status(400).json({ error: "This invitation could not be accepted" });
+  }
 });
 
 router.get("/api/auth/me", requireAuth, async (request, response) => {

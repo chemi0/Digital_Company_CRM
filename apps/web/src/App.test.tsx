@@ -14,6 +14,8 @@ import type {
   DealSummary,
   ActivitySummary,
   TaskSummary,
+  TeamMember,
+  InvitationSummary,
 } from "@agency-crm/shared";
 import App from "./App";
 import { AuthProvider } from "@/lib/auth-context";
@@ -24,6 +26,9 @@ type Store = {
   deals: DealSummary[];
   activities: ActivitySummary[];
   tasks: TaskSummary[];
+  team: TeamMember[];
+  inactiveTeam: TeamMember[];
+  invitations: InvitationSummary[];
   authSession: AuthSession | null;
   allowRefresh: boolean;
 };
@@ -160,6 +165,16 @@ function createStore(overrides?: Partial<Store>): Store {
         company: { id: "company-1", name: "Acme Studio" }, contact: { id: "contact-1", firstName: "Ana", lastName: "Markovic" }, deal: { id: "deal-1", title: "Website support retainer" },
       },
     ],
+    team: ownerOptions.map((owner) => ({
+      id: owner.id,
+      role: owner.role,
+      createdAt: new Date().toISOString(),
+      archivedAt: null,
+      requiresReactivationInvitation: false,
+      user: { ...owner.user, isActive: true, lastLoginAt: new Date().toISOString() },
+    })),
+    inactiveTeam: [],
+    invitations: [],
     authSession: null,
     allowRefresh: false,
     ...overrides,
@@ -240,6 +255,10 @@ function installApiMock(store: Store) {
       return jsonResponse(store.authSession);
     }
 
+    if (path === "/api/auth/invitation-preview" && method === "GET") {
+      return jsonResponse({ mode: "reactivation", organizationName: "Atlas Digital" });
+    }
+
     if (path === "/api/auth/login" && method === "POST") {
       if (body.email === "owner@atlas-digital.test" && body.password === "AtlasAdmin123!") {
         store.authSession = {
@@ -306,6 +325,18 @@ function installApiMock(store: Store) {
 
     if (path === `/api/organizations/${organizationSlug}/tasks` && method === "GET") {
       return jsonResponse(store.tasks.filter((task) => task.completedAt === null));
+    }
+
+    if (path === `/api/organizations/${organizationSlug}/team` && method === "GET") {
+      return jsonResponse(store.team);
+    }
+
+    if (path === `/api/organizations/${organizationSlug}/team/inactive` && method === "GET") {
+      return jsonResponse(store.inactiveTeam);
+    }
+
+    if (path === `/api/organizations/${organizationSlug}/invitations` && method === "GET") {
+      return jsonResponse(store.invitations);
     }
 
     if (path === `/api/organizations/${organizationSlug}/companies` && method === "POST") {
@@ -732,6 +763,29 @@ describe("agency CRM authentication", () => {
     await user.click(screen.getByRole("button", { name: "Create task" }));
 
     expect(await screen.findByText("Book proposal review")).toBeInTheDocument();
+  });
+
+  test("renders the leadership team-management area", async () => {
+    installApiMock(createStore({ authSession: demoSession }));
+    renderApp("/team");
+
+    expect(await screen.findByRole("heading", { name: "Team" })).toBeInTheDocument();
+  });
+
+  test("shows the inactive-member lifecycle area to an admin", async () => {
+    installApiMock(createStore({ authSession: demoSession }));
+    renderApp("/team");
+
+    expect(await screen.findByText("Inactive members")).toBeInTheDocument();
+  });
+
+  test("shows a returning member a reactivation confirmation instead of account setup", async () => {
+    installApiMock(createStore());
+    renderApp("/accept-invitation?token=reactivation-token-that-is-long-enough-for-validation");
+
+    expect(await screen.findByRole("heading", { name: "Reactivate your access" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Reactivate access" })).toBeInTheDocument();
+    expect(screen.queryByLabelText("Create password")).not.toBeInTheDocument();
   });
 
   test("logs out and returns to the login screen", async () => {

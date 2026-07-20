@@ -14,6 +14,11 @@ import type {
   TaskFormValues,
   TaskSummary,
   TaskUpdateValues,
+  TeamMember,
+  InvitationAcceptanceValues,
+  InvitationFormValues,
+  InvitationPreview,
+  InvitationSummary,
 } from "@agency-crm/shared";
 import { requestJson } from "@/lib/api-client";
 const organizationSlug = "atlas-digital";
@@ -153,4 +158,48 @@ export function archiveTask(taskId: string) {
   return requestJson<{ id: string; archived: boolean }>(buildOrgPath(`/tasks/${taskId}`), {
     method: "DELETE",
   });
+}
+
+export function listTeamMembersForManagement() {
+  return requestJson<TeamMember[]>(buildOrgPath("/team"));
+}
+
+export function listInactiveTeamMembers() {
+  return requestJson<TeamMember[]>(buildOrgPath("/team/inactive"));
+}
+
+export function listInvitations() {
+  return requestJson<InvitationSummary[]>(buildOrgPath("/invitations"));
+}
+
+export function createInvitation(values: InvitationFormValues) {
+  return requestJson<InvitationSummary>(buildOrgPath("/invitations"), { method: "POST", body: JSON.stringify(values) });
+}
+
+export function revokeInvitation(invitationId: string) {
+  return requestJson<{ id: string; revoked: boolean }>(buildOrgPath(`/invitations/${invitationId}`), { method: "DELETE" });
+}
+
+export function updateTeamMemberRole(membershipId: string, role: InvitationFormValues["role"]) {
+  return requestJson<TeamMember>(buildOrgPath(`/team/${membershipId}`), { method: "PATCH", body: JSON.stringify({ role }) });
+}
+
+export function deactivateTeamMember(membershipId: string) {
+  return requestJson<{ id: string; deactivated: boolean }>(buildOrgPath(`/team/${membershipId}`), { method: "DELETE" });
+}
+
+export function reactivateTeamMember(membershipId: string) {
+  return requestJson<{ id: string; reactivated: boolean }>(buildOrgPath(`/team/${membershipId}/reactivate`), { method: "PATCH" });
+}
+
+export function sendReactivationInvitation(membershipId: string) {
+  return requestJson<InvitationSummary>(buildOrgPath(`/team/${membershipId}/reactivation-invitation`), { method: "POST" });
+}
+
+export function getInvitationPreview(token: string) {
+  return requestJson<InvitationPreview>(`/api/auth/invitation-preview?token=${encodeURIComponent(token)}`);
+}
+
+export function acceptInvitation(values: InvitationAcceptanceValues) {
+  return requestJson<{ membership: { id: string; role: string } }>("/api/auth/accept-invitation", { method: "POST", body: JSON.stringify(values) });
 }

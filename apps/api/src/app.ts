@@ -6,6 +6,7 @@ import { authRouter } from "./routes/auth-routes.js";
 import { companyContactRouter } from "./routes/company-contact-routes.js";
 import { dealRouter } from "./routes/deal-routes.js";
 import { workRouter } from "./routes/work-routes.js";
+import { teamRouter } from "./routes/team-routes.js";
 import { env } from "./lib/env.js";
 import { prisma } from "./lib/prisma.js";
 
@@ -24,6 +25,7 @@ export function createApp() {
   app.use(companyContactRouter);
   app.use(dealRouter);
   app.use(workRouter);
+  app.use(teamRouter);
 
   app.get("/api/health", async (_request, response) => {
     const [organizations, users, companies, contacts, deals, activities, tasks] = await prisma.$transaction([

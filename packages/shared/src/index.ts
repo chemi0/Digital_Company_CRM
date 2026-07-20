@@ -248,3 +248,48 @@ export type TaskFormValues = {
 export type TaskUpdateValues = Partial<TaskFormValues> & {
   completed?: boolean;
 };
+
+export type TeamMember = {
+  id: string;
+  role: UserRole;
+  createdAt: string | Date;
+  archivedAt: string | Date | null;
+  requiresReactivationInvitation: boolean;
+  user: {
+    id: string;
+    firstName: string;
+    lastName: string;
+    email: string;
+    isActive: boolean;
+    lastLoginAt: string | Date | null;
+  };
+};
+
+export type InvitationStatus = "pending" | "accepted" | "revoked" | "expired";
+
+export type InvitationSummary = {
+  id: string;
+  email: string;
+  role: UserRole;
+  expiresAt: string | Date;
+  createdAt: string | Date;
+  status: InvitationStatus;
+  invitedBy: string;
+};
+
+export type InvitationFormValues = {
+  email: string;
+  role: UserRole;
+};
+
+export type InvitationAcceptanceValues = {
+  token: string;
+  firstName?: string;
+  lastName?: string;
+  password?: string;
+};
+
+export type InvitationPreview = {
+  mode: "new_account" | "reactivation";
+  organizationName: string;
+};

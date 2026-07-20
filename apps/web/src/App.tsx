@@ -11,6 +11,9 @@ import type {
   ActivitySummary,
   TaskFormValues,
   TaskSummary,
+  InvitationFormValues,
+  TeamMember,
+  InvitationSummary,
   LoginCredentials,
 } from "@agency-crm/shared";
 import type { ReactNode } from "react";
@@ -62,6 +65,17 @@ import {
   updateContact,
   updateDeal,
   updateTask,
+  acceptInvitation,
+  createInvitation,
+  deactivateTeamMember,
+  getInvitationPreview,
+  listInvitations,
+  listInactiveTeamMembers,
+  listTeamMembersForManagement,
+  reactivateTeamMember,
+  revokeInvitation,
+  sendReactivationInvitation,
+  updateTeamMemberRole,
 } from "@/lib/crm-api";
 import { cn } from "@/lib/utils";
 
@@ -79,6 +93,9 @@ const queryKeys = {
   dealActivities: (dealId: string) => ["activities", "deal", dealId] as const,
   dealTasks: (dealId: string) => ["tasks", "deal", dealId] as const,
   teamMembers: ["team-members"] as const,
+  team: ["team"] as const,
+  invitations: ["invitations"] as const,
+  inactiveTeam: ["inactive-team"] as const,
 };
 
 const demoCredentials: LoginCredentials | undefined = import.meta.env.DEV
@@ -92,6 +109,7 @@ function App() {
   return (
     <Routes>
       <Route path="/login" element={<LoginPage />} />
+      <Route path="/accept-invitation" element={<AcceptInvitationPage />} />
       <Route element={<ProtectedRoute />}>
         <Route path="/" element={<Navigate to="/companies" replace />} />
         <Route path="/companies" element={<CompaniesPage />} />
@@ -101,6 +119,7 @@ function App() {
         <Route path="/deals" element={<DealsPage />} />
         <Route path="/deals/:dealId" element={<DealDetailPage />} />
         <Route path="/work" element={<WorkPage />} />
+        <Route path="/team" element={<TeamPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
@@ -798,6 +817,87 @@ function WorkPage() {
   );
 }
 
+function TeamPage() {
+  const queryClient = useQueryClient();
+  const { session } = useAuth();
+  const [email, setEmail] = useState("");
+  const [role, setRole] = useState<InvitationFormValues["role"]>("sales_rep");
+  const isAdmin = session?.membership.role === "admin";
+  const teamQuery = useQuery({ queryKey: queryKeys.team, queryFn: listTeamMembersForManagement, enabled: Boolean(session && session.membership.role !== "sales_rep") });
+  const inactiveTeamQuery = useQuery({ queryKey: queryKeys.inactiveTeam, queryFn: listInactiveTeamMembers, enabled: Boolean(isAdmin) });
+  const invitationsQuery = useQuery({ queryKey: queryKeys.invitations, queryFn: listInvitations, enabled: Boolean(session && session.membership.role !== "sales_rep") });
+  const inviteMutation = useMutation({
+    mutationFn: (values: InvitationFormValues) => createInvitation(values),
+    onSuccess: async () => { setEmail(""); await queryClient.invalidateQueries({ queryKey: queryKeys.invitations }); },
+  });
+  const revokeMutation = useMutation({ mutationFn: revokeInvitation, onSuccess: async () => { await queryClient.invalidateQueries({ queryKey: queryKeys.invitations }); } });
+  const roleMutation = useMutation({ mutationFn: ({ membershipId, nextRole }: { membershipId: string; nextRole: InvitationFormValues["role"] }) => updateTeamMemberRole(membershipId, nextRole), onSuccess: async () => { await queryClient.invalidateQueries({ queryKey: queryKeys.team }); } });
+  const refreshTeam = async () => { await Promise.all([queryClient.invalidateQueries({ queryKey: queryKeys.team }), queryClient.invalidateQueries({ queryKey: queryKeys.inactiveTeam }), queryClient.invalidateQueries({ queryKey: queryKeys.invitations })]); };
+  const deactivateMutation = useMutation({ mutationFn: deactivateTeamMember, onSuccess: refreshTeam });
+  const reactivateMutation = useMutation({ mutationFn: reactivateTeamMember, onSuccess: refreshTeam });
+  const reactivationInvitationMutation = useMutation({ mutationFn: sendReactivationInvitation, onSuccess: refreshTeam });
+  const lifecycleError = reactivateMutation.error ?? reactivationInvitationMutation.error;
+
+  if (session?.membership.role === "sales_rep") return <Navigate to="/companies" replace />;
+
+  return <CrmShell title="Team" eyebrow="Access management">
+    <div className="grid gap-6 xl:grid-cols-[1.35fr_0.95fr]">
+      <SectionCard title="Active members" description="Roles control who can access organization-wide records and manage the team.">
+        <DataState isLoading={teamQuery.isLoading} error={teamQuery.error} empty={!teamQuery.data?.length} emptyLabel="No active members">
+          <div className="grid gap-3">{teamQuery.data?.map((member) => <TeamMemberRow key={member.id} member={member} canManage={isAdmin && member.id !== session?.membership.id} onRoleChange={(nextRole) => roleMutation.mutate({ membershipId: member.id, nextRole })} onDeactivate={() => deactivateMutation.mutate(member.id)} />)}</div>
+        </DataState>
+      </SectionCard>
+      <SectionCard title="Invite teammate" description={isAdmin ? "Invite an admin, manager, or sales rep. The link expires after seven days." : "Managers may invite sales reps. The link expires after seven days."}>
+        <form className="grid gap-4" onSubmit={(event) => { event.preventDefault(); inviteMutation.mutate({ email, role }); }}>
+          <label className="grid gap-2 text-sm font-medium text-slate-700"><span>Work email</span><input className="input-field" type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="teammate@company.com" required /></label>
+          <label className="grid gap-2 text-sm font-medium text-slate-700"><span>Role</span><select className="input-field" value={role} onChange={(event) => setRole(event.target.value as InvitationFormValues["role"])}><option value="sales_rep">Sales rep</option>{isAdmin ? <><option value="manager">Manager</option><option value="admin">Admin</option></> : null}</select></label>
+          {inviteMutation.error ? <p className="text-sm font-medium text-rose-600">{inviteMutation.error.message}</p> : null}
+          <Button type="submit" size="lg" className="justify-center" disabled={inviteMutation.isPending}>Send invitation</Button>
+        </form>
+      </SectionCard>
+    </div>
+    {isAdmin ? <SectionCard title="Inactive members" description="Recently deactivated members can be restored directly. Older accounts require email confirmation before access is restored.">
+      <DataState isLoading={inactiveTeamQuery.isLoading} error={inactiveTeamQuery.error} empty={!inactiveTeamQuery.data?.length} emptyLabel="No inactive members">
+        <div className="grid gap-3">{inactiveTeamQuery.data?.map((member) => <InactiveMemberRow key={member.id} member={member} onReactivate={() => reactivateMutation.mutate(member.id)} onSendInvitation={() => reactivationInvitationMutation.mutate(member.id)} isPending={reactivateMutation.isPending || reactivationInvitationMutation.isPending} />)}</div>
+      </DataState>
+      {lifecycleError ? <p className="mt-4 text-sm font-medium text-rose-600">{lifecycleError.message}</p> : null}
+    </SectionCard> : null}
+    <SectionCard title="Invitations" description="Pending invites can be revoked at any time; sending another invite revokes the previous one.">
+      <DataState isLoading={invitationsQuery.isLoading} error={invitationsQuery.error} empty={!invitationsQuery.data?.length} emptyLabel="No invitations yet">
+        <div className="grid gap-3">{invitationsQuery.data?.map((invitation) => <InvitationRow key={invitation.id} invitation={invitation} canRevoke={invitation.status === "pending"} onRevoke={() => revokeMutation.mutate(invitation.id)} />)}</div>
+      </DataState>
+    </SectionCard>
+  </CrmShell>;
+}
+
+function AcceptInvitationPage() {
+  const location = useLocation();
+  const token = new URLSearchParams(location.search).get("token") ?? "";
+  const [firstName, setFirstName] = useState("");
+  const [lastName, setLastName] = useState("");
+  const [password, setPassword] = useState("");
+  const [accepted, setAccepted] = useState(false);
+  const previewQuery = useQuery({ queryKey: ["invitation-preview", token], queryFn: () => getInvitationPreview(token), enabled: Boolean(token) });
+  const isReactivation = previewQuery.data?.mode === "reactivation";
+  const acceptMutation = useMutation({ mutationFn: acceptInvitation, onSuccess: () => setAccepted(true) });
+
+  if (accepted) return <FullPageState title={isReactivation ? "Access reactivated" : "Invitation accepted"} description={isReactivation ? "Your CRM access has been restored. You can now sign in." : "Your account is ready. You can now sign in with the password you created."} action={<Button asChild><Link to="/login">Sign in</Link></Button>} />;
+  if (token && previewQuery.isLoading) return <FullPageState title="Checking invitation" description="Validating your secure invitation link." />;
+  return <div className="flex min-h-screen items-center justify-center bg-[radial-gradient(circle_at_top_left,_rgba(255,255,255,0.95),_rgba(250,247,242,1)_45%,_rgba(243,238,229,1)_100%)] px-4 py-10"><section className="w-full max-w-xl rounded-[32px] border border-white/70 bg-white/90 p-6 shadow-[0_24px_80px_-48px_rgba(15,23,42,0.5)] backdrop-blur md:p-8"><p className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-500">Agency CRM</p><h1 className="mt-3 text-3xl font-semibold tracking-tight text-slate-950">{isReactivation ? "Reactivate your access" : "Join your team"}</h1><p className="mt-3 text-sm leading-6 text-slate-600">{isReactivation ? `Confirm that you want to restore your access to ${previewQuery.data?.organizationName ?? "this workspace"}.` : "Set up your account to accept the secure organization invitation."}</p>{!token ? <p className="mt-6 rounded-2xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">This invitation link is missing its token.</p> : previewQuery.error ? <p className="mt-6 rounded-2xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">{previewQuery.error.message}</p> : <form className="mt-6 grid gap-4" onSubmit={(event) => { event.preventDefault(); acceptMutation.mutate(isReactivation ? { token } : { token, firstName, lastName, password }); }}>{!isReactivation ? <><div className="grid gap-4 md:grid-cols-2"><label className="grid gap-2 text-sm font-medium text-slate-700"><span>First name</span><input className="input-field" value={firstName} onChange={(event) => setFirstName(event.target.value)} required /></label><label className="grid gap-2 text-sm font-medium text-slate-700"><span>Last name</span><input className="input-field" value={lastName} onChange={(event) => setLastName(event.target.value)} required /></label></div><label className="grid gap-2 text-sm font-medium text-slate-700"><span>Create password</span><input className="input-field" type="password" minLength={12} value={password} onChange={(event) => setPassword(event.target.value)} required /></label></> : null}{acceptMutation.error ? <p className="text-sm font-medium text-rose-600">{acceptMutation.error.message}</p> : null}<Button type="submit" size="lg" disabled={acceptMutation.isPending}>{isReactivation ? "Reactivate access" : "Accept invitation"}</Button></form>}</section></div>;
+}
+
+function TeamMemberRow({ member, canManage, onRoleChange, onDeactivate }: { member: TeamMember; canManage: boolean; onRoleChange: (role: InvitationFormValues["role"]) => void; onDeactivate: () => void }) {
+  return <div className="grid gap-3 rounded-[26px] border border-slate-200 bg-slate-50 px-4 py-4 md:grid-cols-[1fr_auto]"><div><p className="font-semibold text-slate-950">{member.user.firstName} {member.user.lastName}</p><p className="text-sm text-slate-500">{member.user.email}</p><p className="mt-2 text-xs font-medium uppercase tracking-[0.16em] text-slate-400">Last login: {member.user.lastLoginAt ? formatDate(member.user.lastLoginAt) : "Never"}</p></div><div className="flex flex-wrap items-center gap-2">{canManage ? <select className="input-field w-32" aria-label={`${member.user.firstName} role`} value={member.role} onChange={(event) => onRoleChange(event.target.value as InvitationFormValues["role"])}><option value="admin">Admin</option><option value="manager">Manager</option><option value="sales_rep">Sales rep</option></select> : <span className="rounded-full bg-slate-200 px-3 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-slate-600">{formatUserRole(member.role)}</span>}{canManage ? <Button type="button" variant="destructive" size="sm" onClick={onDeactivate}>Deactivate</Button> : null}</div></div>;
+}
+
+function InactiveMemberRow({ member, onReactivate, onSendInvitation, isPending }: { member: TeamMember; onReactivate: () => void; onSendInvitation: () => void; isPending: boolean }) {
+  return <div className="grid gap-3 rounded-[26px] border border-amber-200 bg-amber-50/70 px-4 py-4 md:grid-cols-[1fr_auto]"><div><p className="font-semibold text-slate-950">{member.user.firstName} {member.user.lastName}</p><p className="text-sm text-slate-500">{member.user.email}</p><p className="mt-2 text-xs font-medium uppercase tracking-[0.16em] text-amber-700">Deactivated {member.archivedAt ? formatDate(member.archivedAt) : "recently"}</p></div><div className="flex items-center"><Button type="button" variant="outline" size="sm" disabled={isPending} onClick={member.requiresReactivationInvitation ? onSendInvitation : onReactivate}>{member.requiresReactivationInvitation ? "Send reactivation email" : "Reactivate"}</Button></div></div>;
+}
+
+function InvitationRow({ invitation, canRevoke, onRevoke }: { invitation: InvitationSummary; canRevoke: boolean; onRevoke: () => void }) {
+  return <div className="flex flex-wrap items-center justify-between gap-3 rounded-[26px] border border-slate-200 bg-slate-50 px-4 py-4"><div><p className="font-semibold text-slate-950">{invitation.email}</p><p className="mt-1 text-sm text-slate-500">{formatUserRole(invitation.role)} · invited by {invitation.invitedBy}</p><p className="mt-2 text-xs font-medium uppercase tracking-[0.16em] text-slate-400">{invitation.status} · expires {formatDate(invitation.expiresAt)}</p></div>{canRevoke ? <Button type="button" variant="outline" size="sm" onClick={onRevoke}>Revoke</Button> : null}</div>;
+}
+
 function WorkSnapshot({ activities, tasks }: { activities: ActivitySummary[]; tasks: TaskSummary[] }) {
   return <div className="mt-6 rounded-3xl border border-slate-200 bg-slate-50 p-4"><div className="flex items-center justify-between gap-3"><div><p className="text-sm font-semibold text-slate-900">Related work</p><p className="mt-1 text-sm text-slate-500">{tasks.length} open task{tasks.length === 1 ? "" : "s"} · {activities.length} activity record{activities.length === 1 ? "" : "s"}</p></div><Button asChild variant="outline" size="sm"><Link to="/work">Open work</Link></Button></div>{tasks[0] ? <p className="mt-4 rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-600">Next: <span className="font-semibold text-slate-900">{tasks[0].title}</span></p> : null}{activities[0] ? <p className="mt-2 text-sm text-slate-500">Latest activity: {activities[0].subject}</p> : null}</div>;
 }
@@ -997,7 +1097,7 @@ function FeatureCard({ title, description }: { title: string; description: strin
   );
 }
 
-function FullPageState({ title, description }: { title: string; description: string }) {
+function FullPageState({ title, description, action }: { title: string; description: string; action?: ReactNode }) {
   return (
     <div className="flex min-h-screen items-center justify-center bg-[radial-gradient(circle_at_top_left,_rgba(255,255,255,0.95),_rgba(250,247,242,1)_45%,_rgba(243,238,229,1)_100%)] px-4">
       <div className="w-full max-w-xl rounded-[32px] border border-white/70 bg-white/90 p-8 text-center shadow-[0_24px_80px_-48px_rgba(15,23,42,0.5)] backdrop-blur">
@@ -1006,6 +1106,7 @@ function FullPageState({ title, description }: { title: string; description: str
         </div>
         <h1 className="text-2xl font-semibold tracking-tight text-slate-950">{title}</h1>
         <p className="mt-3 text-sm leading-6 text-slate-600">{description}</p>
+        {action ? <div className="mt-6">{action}</div> : null}
       </div>
     </div>
   );
@@ -1061,6 +1162,11 @@ function formatDate(value: string | Date) {
 
 function formatActivityType(type: ActivitySummary["type"]) {
   return type[0].toUpperCase() + type.slice(1);
+}
+
+function formatUserRole(role: InvitationFormValues["role"]) {
+  if (role === "sales_rep") return "Sales rep";
+  return role === "manager" ? "Manager" : "Admin";
 }
 
 export default App;
