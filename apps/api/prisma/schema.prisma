@@ -69,6 +69,7 @@ model User {
   updatedAt       DateTime     @updatedAt
   archivedAt      DateTime?
   authSessions    AuthSession[]
+  passwordResetTokens PasswordResetToken[]
   memberships     Membership[]
   sentInvitations Invitation[] @relation("InvitationInviter")
 }
@@ -123,6 +124,19 @@ model Invitation {
   invitedByUser   User           @relation("InvitationInviter", fields: [invitedByUserId], references: [id])
 
   @@index([organizationId, email])
+  @@index([expiresAt])
+}
+
+model PasswordResetToken {
+  id        String   @id @default(cuid())
+  userId    String
+  tokenHash String   @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id])
+
+  @@index([userId])
   @@index([expiresAt])
 }
 

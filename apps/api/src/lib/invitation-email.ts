@@ -56,6 +56,33 @@ export async function sendInvitationEmail(message: InvitationEmail) {
   if (!response.ok) throw new Error("Resend did not accept the invitation email");
 }
 
+type PasswordResetEmail = {
+  recipient: string;
+  firstName: string;
+  resetUrl: string;
+};
+
+export async function sendPasswordResetEmail(message: PasswordResetEmail) {
+  const firstName = escapeHtml(message.firstName);
+  const subject = "Reset your Agency CRM password";
+  const text = `Hello ${message.firstName}, reset your Agency CRM password: ${message.resetUrl}`;
+  const html = `<p>Hello ${firstName},</p><p>Use this link to reset your Agency CRM password:</p><p><a href="${message.resetUrl}">Reset password</a></p><p>This link expires in 1 hour.</p>`;
+
+  if (env.EMAIL_PROVIDER === "console") {
+    console.info(`[Password reset email] To: ${message.recipient}\n${text}`);
+    return;
+  }
+
+  if (env.EMAIL_PROVIDER === "smtp") {
+    const transport = nodemailer.createTransport({ host: env.SMTP_HOST!, port: env.SMTP_PORT!, secure: env.SMTP_SECURE === "true", auth: { user: env.SMTP_USER!, pass: env.SMTP_PASSWORD! } });
+    await transport.sendMail({ from: env.EMAIL_FROM!, to: message.recipient, subject, text, html });
+    return;
+  }
+
+  const response = await fetch("https://api.resend.com/emails", { method: "POST", headers: { Authorization: `Bearer ${env.RESEND_API_KEY!}`, "Content-Type": "application/json" }, body: JSON.stringify({ from: env.EMAIL_FROM!, to: [message.recipient], subject, text, html }) });
+  if (!response.ok) throw new Error("Resend did not accept the password reset email");
+}
+
 function escapeHtml(value: string) {
   return value.replace(/[&<>'"]/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" })[character]!);
 }

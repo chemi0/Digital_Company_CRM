@@ -1,4 +1,4 @@
-import type { AuthSession, LoginCredentials } from "@agency-crm/shared";
+import type { AuthSession, LoginCredentials, PasswordResetRequestValues, PasswordResetValues } from "@agency-crm/shared";
 import { ApiError, requestJson } from "@/lib/api-client";
 
 export const authQueryKey = ["auth", "session"] as const;
@@ -38,4 +38,12 @@ export async function logout() {
 
     throw error;
   }
+}
+
+export function requestPasswordReset(values: PasswordResetRequestValues) {
+  return requestJson<{ requested: boolean }>("/api/auth/forgot-password", { method: "POST", body: JSON.stringify(values) }, { retryOnUnauthorized: false });
+}
+
+export function resetPassword(values: PasswordResetValues) {
+  return requestJson<{ passwordReset: boolean }>("/api/auth/reset-password", { method: "POST", body: JSON.stringify(values) }, { retryOnUnauthorized: false });
 }

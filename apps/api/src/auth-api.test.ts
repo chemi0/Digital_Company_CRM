@@ -1,4 +1,5 @@
 import bcrypt from "bcrypt";
+import { createHash } from "crypto";
 import request from "supertest";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { createApp } from "./app.js";
@@ -119,6 +120,10 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  const passwordHash = await bcrypt.hash(demoPassword, 10);
+  await prisma.user.updateMany({ where: { email: demoUserEmail }, data: { passwordHash } });
+  await prisma.authSession.deleteMany({ where: { user: { email: demoUserEmail } } });
+  await prisma.passwordResetToken.deleteMany({ where: { user: { email: demoUserEmail } } });
   const forbiddenOrganization = await prisma.organization.findUnique({
     where: { slug: forbiddenOrgSlug },
   });
@@ -238,6 +243,12 @@ describe("auth API", () => {
     expect(meResponse.status).toBe(401);
   });
 
+  test("rejects state-changing browser requests from an untrusted origin", async () => {
+    const response = await request(app).post("/api/auth/logout").set("Origin", "https://attacker.example");
+
+    expect(response.status).toBe(403);
+  });
+
   test("rejects access to a different organization slug", async () => {
     const agent = request.agent(app);
 
@@ -251,5 +262,31 @@ describe("auth API", () => {
     );
 
     expect(response.status).toBe(403);
+  });
+
+  test("resets a password once and revokes active sessions", async () => {
+    const rawToken = "password-reset-token-that-is-long-enough-for-validation";
+    const user = await prisma.user.findUniqueOrThrow({ where: { email: demoUserEmail } });
+    const agent = request.agent(app);
+    await agent.post("/api/auth/login").send({ email: demoUserEmail, password: demoPassword });
+    await prisma.passwordResetToken.create({
+      data: {
+        userId: user.id,
+        tokenHash: createHash("sha256").update(rawToken).digest("hex"),
+        expiresAt: new Date("2030-01-01T00:00:00.000Z"),
+      },
+    });
+
+    const resetResponse = await request(app).post("/api/auth/reset-password").send({ token: rawToken, password: "RecoveredPassword123!" });
+    const oldLoginResponse = await request(app).post("/api/auth/login").send({ email: demoUserEmail, password: demoPassword });
+    const newLoginResponse = await request(app).post("/api/auth/login").send({ email: demoUserEmail, password: "RecoveredPassword123!" });
+    const sessionResponse = await agent.get("/api/auth/me");
+    const repeatResetResponse = await request(app).post("/api/auth/reset-password").send({ token: rawToken, password: "AnotherPassword123!" });
+
+    expect(resetResponse.status).toBe(200);
+    expect(oldLoginResponse.status).toBe(401);
+    expect(newLoginResponse.status).toBe(200);
+    expect(sessionResponse.status).toBe(401);
+    expect(repeatResetResponse.status).toBe(400);
   });
 });

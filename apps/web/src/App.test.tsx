@@ -271,6 +271,14 @@ function installApiMock(store: Store) {
       return errorResponse("Invalid email or password", 401);
     }
 
+    if (path === "/api/auth/forgot-password" && method === "POST") {
+      return jsonResponse({ requested: true });
+    }
+
+    if (path === "/api/auth/reset-password" && method === "POST") {
+      return jsonResponse({ passwordReset: true });
+    }
+
     if (path === "/api/auth/refresh" && method === "POST") {
       if (!store.allowRefresh) {
         return errorResponse("Refresh token required", 401);
@@ -647,6 +655,12 @@ describe("agency CRM authentication", () => {
     expect(screen.getByText("Atlas Owner")).toBeInTheDocument();
     expect(screen.getByText("Admin")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Log out" })).toBeInTheDocument();
+  });
+
+  test("renders the password recovery request screen", async () => {
+    renderApp("/forgot-password");
+
+    expect(await screen.findByRole("heading", { name: "Reset your password" })).toBeInTheDocument();
   });
 
   test("lets leadership assign a company owner", async () => {

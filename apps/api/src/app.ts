@@ -2,6 +2,7 @@ import "dotenv/config";
 import cookieParser from "cookie-parser";
 import cors from "cors";
 import express from "express";
+import helmet from "helmet";
 import { authRouter } from "./routes/auth-routes.js";
 import { companyContactRouter } from "./routes/company-contact-routes.js";
 import { dealRouter } from "./routes/deal-routes.js";
@@ -9,9 +10,12 @@ import { workRouter } from "./routes/work-routes.js";
 import { teamRouter } from "./routes/team-routes.js";
 import { env } from "./lib/env.js";
 import { prisma } from "./lib/prisma.js";
+import { requireTrustedOrigin, sensitiveAuthLimiter } from "./middleware/security.js";
 
 export function createApp() {
   const app = express();
+  app.disable("x-powered-by");
+  app.use(helmet({ contentSecurityPolicy: false }));
 
   app.use(
     cors({
@@ -20,7 +24,11 @@ export function createApp() {
     }),
   );
   app.use(cookieParser());
-  app.use(express.json());
+  app.use(express.json({ limit: "100kb" }));
+  app.use(requireTrustedOrigin);
+  app.use("/api/auth/login", sensitiveAuthLimiter);
+  app.use("/api/auth/forgot-password", sensitiveAuthLimiter);
+  app.use("/api/auth/reset-password", sensitiveAuthLimiter);
   app.use(authRouter);
   app.use(companyContactRouter);
   app.use(dealRouter);

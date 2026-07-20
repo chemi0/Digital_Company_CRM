@@ -29,6 +29,15 @@ export type LoginCredentials = {
   password: string;
 };
 
+export type PasswordResetRequestValues = {
+  email: string;
+};
+
+export type PasswordResetValues = {
+  token: string;
+  password: string;
+};
+
 export type CompanyOwner = {
   id: string;
   role: UserRole;

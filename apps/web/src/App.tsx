@@ -15,6 +15,8 @@ import type {
   TeamMember,
   InvitationSummary,
   LoginCredentials,
+  PasswordResetRequestValues,
+  PasswordResetValues,
 } from "@agency-crm/shared";
 import type { ReactNode } from "react";
 import { useState } from "react";
@@ -43,6 +45,7 @@ import { CrmShell, SectionCard } from "@/components/crm-shell";
 import { LoginForm } from "@/components/login-form";
 import { ApiError } from "@/lib/api-client";
 import { useAuth } from "@/lib/auth-context";
+import { requestPasswordReset, resetPassword } from "@/lib/auth-api";
 import {
   archiveContact,
   archiveDeal,
@@ -109,6 +112,8 @@ function App() {
   return (
     <Routes>
       <Route path="/login" element={<LoginPage />} />
+      <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+      <Route path="/reset-password" element={<ResetPasswordPage />} />
       <Route path="/accept-invitation" element={<AcceptInvitationPage />} />
       <Route element={<ProtectedRoute />}>
         <Route path="/" element={<Navigate to="/companies" replace />} />
@@ -201,10 +206,32 @@ function LoginPage() {
               onSubmit={handleSubmit}
             />
           </div>
+          <Link to="/forgot-password" className="mt-4 inline-flex text-sm font-semibold text-slate-700 underline-offset-4 hover:underline">Forgot your password?</Link>
         </section>
       </div>
     </div>
   );
+}
+
+function ForgotPasswordPage() {
+  const [email, setEmail] = useState("");
+  const [requested, setRequested] = useState(false);
+  const mutation = useMutation({ mutationFn: requestPasswordReset, onSuccess: () => setRequested(true) });
+  if (requested) return <FullPageState title="Check your email" description="If that account exists, we sent a secure password-reset link." action={<Button asChild><Link to="/login">Back to sign in</Link></Button>} />;
+  return <PublicAuthCard title="Reset your password" description="Enter your work email and we will send a one-hour reset link."><form className="grid gap-4" onSubmit={(event) => { event.preventDefault(); mutation.mutate({ email } satisfies PasswordResetRequestValues); }}><label className="grid gap-2 text-sm font-medium text-slate-700"><span>Work email</span><input className="input-field" type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} required /></label>{mutation.error ? <p className="text-sm font-medium text-rose-600">{mutation.error.message}</p> : null}<Button type="submit" size="lg" disabled={mutation.isPending}>Send reset link</Button></form><Link to="/login" className="mt-5 inline-flex text-sm font-semibold text-slate-700 underline-offset-4 hover:underline">Back to sign in</Link></PublicAuthCard>;
+}
+
+function ResetPasswordPage() {
+  const token = new URLSearchParams(useLocation().search).get("token") ?? "";
+  const [password, setPassword] = useState("");
+  const [reset, setReset] = useState(false);
+  const mutation = useMutation({ mutationFn: resetPassword, onSuccess: () => setReset(true) });
+  if (reset) return <FullPageState title="Password updated" description="Your active sessions were signed out for security. Sign in with your new password." action={<Button asChild><Link to="/login">Sign in</Link></Button>} />;
+  return <PublicAuthCard title="Choose a new password" description="Use at least 12 characters. This link expires after one hour.">{!token ? <p className="rounded-2xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">This password reset link is missing its token.</p> : <form className="grid gap-4" onSubmit={(event) => { event.preventDefault(); mutation.mutate({ token, password } satisfies PasswordResetValues); }}><label className="grid gap-2 text-sm font-medium text-slate-700"><span>New password</span><input className="input-field" type="password" autoComplete="new-password" minLength={12} value={password} onChange={(event) => setPassword(event.target.value)} required /></label>{mutation.error ? <p className="text-sm font-medium text-rose-600">{mutation.error.message}</p> : null}<Button type="submit" size="lg" disabled={mutation.isPending}>Update password</Button></form>}</PublicAuthCard>;
+}
+
+function PublicAuthCard({ title, description, children }: { title: string; description: string; children: ReactNode }) {
+  return <div className="flex min-h-screen items-center justify-center bg-[radial-gradient(circle_at_top_left,_rgba(255,255,255,0.95),_rgba(250,247,242,1)_45%,_rgba(243,238,229,1)_100%)] px-4 py-10"><section className="w-full max-w-xl rounded-[32px] border border-white/70 bg-white/90 p-6 shadow-[0_24px_80px_-48px_rgba(15,23,42,0.5)] backdrop-blur md:p-8"><p className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-500">Agency CRM</p><h1 className="mt-3 text-3xl font-semibold tracking-tight text-slate-950">{title}</h1><p className="mt-3 text-sm leading-6 text-slate-600">{description}</p><div className="mt-6">{children}</div></section></div>;
 }
 
 function ProtectedRoute() {

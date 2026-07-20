@@ -13,9 +13,11 @@ import {
   verifyRefreshToken,
 } from "../lib/auth.js";
 import { loadActiveAuthContextForUser } from "../lib/auth-context.js";
+import { env } from "../lib/env.js";
 import { requireAuth } from "../middleware/auth.js";
 import { prisma } from "../lib/prisma.js";
-import { hashInvitationToken } from "../lib/invitation-email.js";
+import { hashInvitationToken, sendPasswordResetEmail } from "../lib/invitation-email.js";
+import { createPasswordResetToken, hashPasswordResetToken } from "../lib/password-reset.js";
 
 const router = Router();
 
@@ -32,6 +34,8 @@ const acceptInvitationSchema = z.object({
 });
 
 const invitationPreviewSchema = z.object({ token: z.string().min(32) });
+const forgotPasswordSchema = z.object({ email: z.email() });
+const resetPasswordSchema = z.object({ token: z.string().min(32), password: z.string().min(12).max(128) });
 
 async function buildSessionResponse(userId: string, sessionId: string) {
   const authContext = await loadActiveAuthContextForUser(userId);
@@ -153,6 +157,47 @@ router.get("/api/auth/invitation-preview", async (request, response) => {
   const inactiveMembership = await prisma.membership.findFirst({ where: { organizationId: invitation.organizationId, userId: existingUser.id, archivedAt: { not: null } }, select: { id: true } });
   if (!inactiveMembership) return response.status(400).json({ error: "This invitation cannot be used for an active account" });
   return response.json({ data: { mode: "reactivation", organizationName: invitation.organization.name } });
+});
+
+router.post("/api/auth/forgot-password", async (request, response) => {
+  const parsed = forgotPasswordSchema.safeParse(request.body);
+  if (!parsed.success) return response.status(400).json({ error: "Invalid password reset request" });
+  const user = await prisma.user.findFirst({ where: { email: parsed.data.email.toLowerCase(), isActive: true, archivedAt: null }, select: { id: true, email: true, firstName: true } });
+  if (!user) return response.json({ data: { requested: true } });
+
+  const token = createPasswordResetToken();
+  const resetToken = await prisma.$transaction(async (transaction) => {
+    await transaction.passwordResetToken.updateMany({ where: { userId: user.id, usedAt: null }, data: { usedAt: new Date() } });
+    return transaction.passwordResetToken.create({ data: { userId: user.id, tokenHash: hashPasswordResetToken(token), expiresAt: new Date(Date.now() + 60 * 60 * 1_000) } });
+  });
+  try {
+    await sendPasswordResetEmail({ recipient: user.email, firstName: user.firstName, resetUrl: `${env.CLIENT_URL}/reset-password?token=${encodeURIComponent(token)}` });
+  } catch {
+    await prisma.passwordResetToken.update({ where: { id: resetToken.id }, data: { usedAt: new Date() } });
+  }
+  return response.json({ data: { requested: true } });
+});
+
+router.post("/api/auth/reset-password", async (request, response) => {
+  const parsed = resetPasswordSchema.safeParse(request.body);
+  if (!parsed.success) return response.status(400).json({ error: "Invalid password reset payload" });
+  const resetToken = await prisma.passwordResetToken.findFirst({ where: { tokenHash: hashPasswordResetToken(parsed.data.token), usedAt: null, expiresAt: { gt: new Date() } }, select: { id: true, userId: true } });
+  if (!resetToken) return response.status(400).json({ error: "This password reset link is invalid, expired, or already used" });
+
+  const passwordHash = await bcrypt.hash(parsed.data.password, 12);
+  try {
+    const consumed = await prisma.$transaction(async (transaction) => {
+      const updated = await transaction.passwordResetToken.updateMany({ where: { id: resetToken.id, usedAt: null }, data: { usedAt: new Date() } });
+      if (updated.count !== 1) throw new Error("Password reset token was already used");
+      await transaction.user.update({ where: { id: resetToken.userId }, data: { passwordHash } });
+      await transaction.passwordResetToken.updateMany({ where: { userId: resetToken.userId, usedAt: null }, data: { usedAt: new Date() } });
+      await transaction.authSession.updateMany({ where: { userId: resetToken.userId, revokedAt: null }, data: { revokedAt: new Date(), lastUsedAt: new Date() } });
+      return true;
+    });
+    return response.json({ data: { passwordReset: consumed } });
+  } catch {
+    return response.status(400).json({ error: "This password reset link is invalid, expired, or already used" });
+  }
 });
 
 router.post("/api/auth/accept-invitation", async (request, response) => {

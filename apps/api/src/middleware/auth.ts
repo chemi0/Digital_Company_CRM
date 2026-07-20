@@ -1,6 +1,7 @@
 import type { NextFunction, Request, Response } from "express";
 import { ACCESS_TOKEN_COOKIE, verifyAccessToken } from "../lib/auth.js";
 import { loadActiveAuthContextForUser } from "../lib/auth-context.js";
+import { prisma } from "../lib/prisma.js";
 
 export async function requireAuth(request: Request, response: Response, next: NextFunction) {
   const accessToken = request.cookies[ACCESS_TOKEN_COOKIE];
@@ -11,9 +12,12 @@ export async function requireAuth(request: Request, response: Response, next: Ne
 
   try {
     const payload = verifyAccessToken(accessToken);
-    const authContext = await loadActiveAuthContextForUser(payload.userId);
+    const [authContext, session] = await Promise.all([
+      loadActiveAuthContextForUser(payload.userId),
+      prisma.authSession.findFirst({ where: { id: payload.sessionId, userId: payload.userId, revokedAt: null, expiresAt: { gt: new Date() } }, select: { id: true } }),
+    ]);
 
-    if (!authContext || authContext.organization.slug !== payload.organizationSlug) {
+    if (!session || !authContext || authContext.organization.slug !== payload.organizationSlug) {
       return response.status(401).json({ error: "Authentication required" });
     }
 
