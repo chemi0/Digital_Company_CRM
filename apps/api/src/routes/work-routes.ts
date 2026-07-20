@@ -2,6 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { toApiRole } from "../lib/auth-context.js";
 import { prisma } from "../lib/prisma.js";
+import { recordAuditEvent } from "../lib/audit-log.js";
 import { requireAuth, requireOrganizationAccess } from "../middleware/auth.js";
 
 const router = Router();
@@ -213,6 +214,7 @@ router.post("/api/organizations/:organizationSlug/activities", async (request, r
       body: parsed.data.body ?? null, occurredAt: parsed.data.occurredAt ? new Date(parsed.data.occurredAt) : undefined },
     include: { authorMembership: { select: membershipSelect }, company: { select: { id: true, name: true } }, contact: { select: { id: true, firstName: true, lastName: true } }, deal: { select: { id: true, title: true } } },
   });
+  await recordAuditEvent({ organizationId: organization.id, actorUserId: request.auth!.userId, action: "activity.created", subjectType: "activity", subjectId: activity.id, metadata: { type: activity.type, companyId: activity.companyId } });
   return response.status(201).json({ data: toActivityResponse(activity, { company: activity.company, contact: activity.contact, deal: activity.deal }) });
 });
 
@@ -246,6 +248,7 @@ router.post("/api/organizations/:organizationSlug/tasks", async (request, respon
       description: parsed.data.description ?? null, priority: toTaskPriority(parsed.data.priority), dueAt: toDueDate(parsed.data.dueAt) },
     include: { assigneeMembership: { select: membershipSelect }, createdByMembership: { select: membershipSelect }, company: { select: { id: true, name: true } }, contact: { select: { id: true, firstName: true, lastName: true } }, deal: { select: { id: true, title: true } } },
   });
+  await recordAuditEvent({ organizationId: organization.id, actorUserId: request.auth!.userId, action: "task.created", subjectType: "task", subjectId: task.id, metadata: { priority: task.priority, companyId: task.companyId } });
   return response.status(201).json({ data: toTaskResponse(task, { company: task.company, contact: task.contact, deal: task.deal }) });
 });
 
@@ -272,6 +275,7 @@ router.patch("/api/organizations/:organizationSlug/tasks/:taskId", async (reques
       dueAt: toDueDate(parsed.data.dueAt), completedAt: parsed.data.completed === undefined ? undefined : parsed.data.completed ? new Date() : null },
     include: { assigneeMembership: { select: membershipSelect }, createdByMembership: { select: membershipSelect }, company: { select: { id: true, name: true } }, contact: { select: { id: true, firstName: true, lastName: true } }, deal: { select: { id: true, title: true } } },
   });
+  await recordAuditEvent({ organizationId: organization.id, actorUserId: request.auth!.userId, action: "task.updated", subjectType: "task", subjectId: task.id, metadata: { completed: task.completedAt !== null } });
   return response.json({ data: toTaskResponse(task, { company: task.company, contact: task.contact, deal: task.deal }) });
 });
 
@@ -280,6 +284,7 @@ router.delete("/api/organizations/:organizationSlug/tasks/:taskId", async (reque
   const existing = await prisma.task.findFirst({ where: { id: request.params.taskId, organizationId: organization.id, archivedAt: null, ...workAccessScope(membership) }, select: { id: true } });
   if (!existing) return response.status(404).json({ error: "Task not found in this organization" });
   const task = await prisma.task.update({ where: { id: existing.id }, data: { archivedAt: new Date() }, select: { id: true, archivedAt: true } });
+  await recordAuditEvent({ organizationId: organization.id, actorUserId: request.auth!.userId, action: "task.archived", subjectType: "task", subjectId: task.id });
   return response.json({ data: { id: task.id, archived: task.archivedAt !== null, archivedAt: task.archivedAt } });
 });
 

@@ -102,6 +102,14 @@ describe("team and invitation API", () => {
     expect(response.status).toBe(403);
   });
 
+  test("restricts the audit trail to organization admins", async () => {
+    const salesRep = await login(salesEmail);
+
+    const response = await salesRep.get(`/api/organizations/${organizationSlug}/audit-log`);
+
+    expect(response.status).toBe(403);
+  });
+
   test("accepts a valid invitation once and creates a membership", async () => {
     const rawToken = "accepted-invite-token-that-is-long-enough-for-validation";
     await prisma.invitation.create({

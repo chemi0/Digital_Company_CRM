@@ -4,6 +4,7 @@ import { toApiRole } from "../lib/auth-context.js";
 import { createInvitationToken, hashInvitationToken, sendInvitationEmail } from "../lib/invitation-email.js";
 import { env } from "../lib/env.js";
 import { prisma } from "../lib/prisma.js";
+import { recordAuditEvent } from "../lib/audit-log.js";
 import { requireAuth, requireOrganizationAccess } from "../middleware/auth.js";
 
 const router = Router();
@@ -100,6 +101,7 @@ router.post("/api/organizations/:organizationSlug/invitations", async (request, 
     await prisma.invitation.update({ where: { id: invitation.id }, data: { revokedAt: new Date() } });
     return response.status(502).json({ error: "Invitation email could not be sent" });
   }
+  await recordAuditEvent({ organizationId: organization.id, actorUserId: request.auth!.userId, action: "team.invitation_sent", subjectType: "invitation", subjectId: invitation.id, metadata: { role: invitation.role } });
   return response.status(201).json({ data: toInviteResponse(invitation) });
 });
 
@@ -109,6 +111,7 @@ router.delete("/api/organizations/:organizationSlug/invitations/:invitationId", 
   const invitation = await prisma.invitation.findFirst({ where: { id: request.params.invitationId, organizationId: organization.id, acceptedAt: null, revokedAt: null } });
   if (!invitation) return response.status(404).json({ error: "Pending invitation not found" });
   await prisma.invitation.update({ where: { id: invitation.id }, data: { revokedAt: new Date() } });
+  await recordAuditEvent({ organizationId: organization.id, actorUserId: request.auth!.userId, action: "team.invitation_revoked", subjectType: "invitation", subjectId: invitation.id });
   return response.json({ data: { id: invitation.id, revoked: true } });
 });
 
@@ -121,6 +124,7 @@ router.patch("/api/organizations/:organizationSlug/team/:membershipId", async (r
   const target = await prisma.membership.findFirst({ where: { id: request.params.membershipId, organizationId: organization.id, archivedAt: null }, select: memberSelect });
   if (!target) return response.status(404).json({ error: "Team member not found" });
   const updated = await prisma.membership.update({ where: { id: target.id }, data: { role: toPrismaRole(parsed.data.role) }, select: memberSelect });
+  await recordAuditEvent({ organizationId: organization.id, actorUserId: request.auth!.userId, action: "team.member_role_changed", subjectType: "membership", subjectId: updated.id, metadata: { role: updated.role } });
   return response.json({ data: toMemberResponse(updated) });
 });
 
@@ -138,6 +142,7 @@ router.delete("/api/organizations/:organizationSlug/team/:membershipId", async (
     prisma.membership.update({ where: { id: target.id }, data: { archivedAt: new Date() } }),
     prisma.authSession.updateMany({ where: { userId: target.userId, revokedAt: null }, data: { revokedAt: new Date(), lastUsedAt: new Date() } }),
   ]);
+  await recordAuditEvent({ organizationId: organization.id, actorUserId: request.auth!.userId, action: "team.member_deactivated", subjectType: "membership", subjectId: target.id });
   return response.json({ data: { id: target.id, deactivated: true } });
 });
 
@@ -149,6 +154,7 @@ router.patch("/api/organizations/:organizationSlug/team/:membershipId/reactivate
   if (requiresReactivationInvitation(target.archivedAt)) return response.status(409).json({ error: "This member must confirm reactivation through an email invitation" });
 
   await prisma.membership.update({ where: { id: target.id }, data: { archivedAt: null } });
+  await recordAuditEvent({ organizationId: organization.id, actorUserId: request.auth!.userId, action: "team.member_reactivated", subjectType: "membership", subjectId: target.id });
   return response.json({ data: { id: target.id, reactivated: true } });
 });
 
@@ -176,6 +182,7 @@ router.post("/api/organizations/:organizationSlug/team/:membershipId/reactivatio
     return response.status(502).json({ error: "Reactivation email could not be sent" });
   }
 
+  await recordAuditEvent({ organizationId: organization.id, actorUserId: request.auth!.userId, action: "team.reactivation_invitation_sent", subjectType: "invitation", subjectId: invitation.id });
   return response.status(201).json({ data: toInviteResponse(invitation) });
 });
 

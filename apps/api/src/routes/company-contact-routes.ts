@@ -2,6 +2,7 @@ import { Router } from "express";
 import { Prisma } from "../generated/prisma/client.js";
 import { toApiRole } from "../lib/auth-context.js";
 import { prisma } from "../lib/prisma.js";
+import { recordAuditEvent } from "../lib/audit-log.js";
 import { requireAuth, requireLeadershipRole, requireOrganizationAccess } from "../middleware/auth.js";
 import { z } from "zod";
 
@@ -406,6 +407,8 @@ router.post("/api/organizations/:organizationSlug/companies", async (request, re
       },
     });
 
+    await recordAuditEvent({ organizationId: organization.id, actorUserId: request.auth!.userId, action: "company.created", subjectType: "company", subjectId: company.id, metadata: { name: company.name } });
+
     return response.status(201).json({ data: toCompanyResponse(company) });
   } catch (error) {
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
@@ -469,6 +472,8 @@ router.patch("/api/organizations/:organizationSlug/companies/:companyId", async 
       },
     });
 
+    await recordAuditEvent({ organizationId: organization.id, actorUserId: request.auth!.userId, action: "company.updated", subjectType: "company", subjectId: company.id, metadata: { name: company.name } });
+
     return response.json({ data: toCompanyResponse(company) });
   } catch (error) {
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
@@ -523,6 +528,8 @@ router.post("/api/organizations/:organizationSlug/contacts", async (request, res
       },
     },
   });
+
+  await recordAuditEvent({ organizationId: organization.id, actorUserId: request.auth!.userId, action: "contact.created", subjectType: "contact", subjectId: contact.id, metadata: { companyId: contact.companyId } });
 
   return response.status(201).json({
     data: toContactResponse(contact, { company: contact.company }),
@@ -596,6 +603,8 @@ router.patch("/api/organizations/:organizationSlug/contacts/:contactId", async (
     },
   });
 
+  await recordAuditEvent({ organizationId: organization.id, actorUserId: request.auth!.userId, action: "contact.updated", subjectType: "contact", subjectId: contact.id, metadata: { companyId: contact.companyId } });
+
   return response.json({
     data: toContactResponse(contact, { company: contact.company }),
   });
@@ -631,6 +640,8 @@ router.delete("/api/organizations/:organizationSlug/contacts/:contactId", async 
       archivedAt: true,
     },
   });
+
+  await recordAuditEvent({ organizationId: organization.id, actorUserId: request.auth!.userId, action: "contact.archived", subjectType: "contact", subjectId: archivedContact.id });
 
   return response.json({
     data: {

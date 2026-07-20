@@ -55,6 +55,7 @@ model Organization {
   deals       Deal[]
   activities  Activity[]
   tasks       Task[]
+  auditEvents AuditEvent[]
 }
 
 model User {
@@ -70,6 +71,7 @@ model User {
   archivedAt      DateTime?
   authSessions    AuthSession[]
   passwordResetTokens PasswordResetToken[]
+  auditEvents      AuditEvent[] @relation("AuditActor")
   memberships     Membership[]
   sentInvitations Invitation[] @relation("InvitationInviter")
 }
@@ -138,6 +140,23 @@ model PasswordResetToken {
 
   @@index([userId])
   @@index([expiresAt])
+}
+
+model AuditEvent {
+  id          String   @id @default(cuid())
+  organizationId String
+  actorUserId String?
+  action      String
+  subjectType String?
+  subjectId   String?
+  metadata    Json?
+  createdAt   DateTime @default(now())
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  actor       User?    @relation("AuditActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, createdAt])
+  @@index([organizationId, action, createdAt])
+  @@index([actorUserId])
 }
 
 model Company {

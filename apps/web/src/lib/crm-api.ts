@@ -19,8 +19,11 @@ import type {
   InvitationFormValues,
   InvitationPreview,
   InvitationSummary,
+  AuditEvent,
+  DashboardSummary,
+  GlobalSearchResults,
 } from "@agency-crm/shared";
-import { requestJson } from "@/lib/api-client";
+import { requestJson, requestPaginatedJson } from "@/lib/api-client";
 const organizationSlug = "atlas-digital";
 
 function buildOrgPath(path: string) {
@@ -194,6 +197,18 @@ export function reactivateTeamMember(membershipId: string) {
 
 export function sendReactivationInvitation(membershipId: string) {
   return requestJson<InvitationSummary>(buildOrgPath(`/team/${membershipId}/reactivation-invitation`), { method: "POST" });
+}
+
+export function listAuditEvents(page: number) {
+  return requestPaginatedJson<AuditEvent>(buildOrgPath(`/audit-log?page=${page}`));
+}
+
+export function getDashboard() {
+  return requestJson<DashboardSummary>(buildOrgPath("/dashboard"));
+}
+
+export function searchCrm(query: string) {
+  return requestJson<GlobalSearchResults>(buildOrgPath(`/search?q=${encodeURIComponent(query)}`));
 }
 
 export function getInvitationPreview(token: string) {

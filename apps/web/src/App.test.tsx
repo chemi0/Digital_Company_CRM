@@ -29,6 +29,15 @@ type Store = {
   team: TeamMember[];
   inactiveTeam: TeamMember[];
   invitations: InvitationSummary[];
+  auditEvents: Array<{
+    id: string;
+    action: string;
+    subjectType: string | null;
+    subjectId: string | null;
+    metadata: Record<string, unknown> | null;
+    createdAt: string;
+    actor: { id: string; firstName: string; lastName: string; email: string } | null;
+  }>;
   authSession: AuthSession | null;
   allowRefresh: boolean;
 };
@@ -175,6 +184,17 @@ function createStore(overrides?: Partial<Store>): Store {
     })),
     inactiveTeam: [],
     invitations: [],
+    auditEvents: [
+      {
+        id: "audit-1",
+        action: "auth.password_changed",
+        subjectType: "user",
+        subjectId: "user-1",
+        metadata: null,
+        createdAt: new Date().toISOString(),
+        actor: { id: "user-1", firstName: "Atlas", lastName: "Owner", email: "owner@atlas-digital.test" },
+      },
+    ],
     authSession: null,
     allowRefresh: false,
     ...overrides,
@@ -279,6 +299,10 @@ function installApiMock(store: Store) {
       return jsonResponse({ passwordReset: true });
     }
 
+    if (path === "/api/auth/change-password" && method === "POST") {
+      return jsonResponse({ passwordChanged: true });
+    }
+
     if (path === "/api/auth/refresh" && method === "POST") {
       if (!store.allowRefresh) {
         return errorResponse("Refresh token required", 401);
@@ -300,6 +324,21 @@ function installApiMock(store: Store) {
 
     if (!store.authSession) {
       return errorResponse("Authentication required", 401);
+    }
+
+    if (path === `/api/organizations/${organizationSlug}/search` && method === "GET") {
+      const query = (url.searchParams.get("q") ?? "").toLowerCase();
+      return jsonResponse({
+        companies: store.companies
+          .filter((company) => company.name.toLowerCase().includes(query))
+          .map((company) => ({ id: company.id, name: company.name, status: company.status })),
+        contacts: store.contacts
+          .filter((contact) => `${contact.firstName} ${contact.lastName} ${contact.email ?? ""}`.toLowerCase().includes(query))
+          .map((contact) => ({ id: contact.id, firstName: contact.firstName, lastName: contact.lastName, email: contact.email, company: contact.company })),
+        deals: store.deals
+          .filter((deal) => `${deal.title} ${deal.source ?? ""}`.toLowerCase().includes(query))
+          .map((deal) => ({ id: deal.id, title: deal.title, stage: deal.stage, company: deal.company })),
+      });
     }
 
     if (path === `/api/organizations/${organizationSlug}/companies` && method === "GET") {
@@ -345,6 +384,30 @@ function installApiMock(store: Store) {
 
     if (path === `/api/organizations/${organizationSlug}/invitations` && method === "GET") {
       return jsonResponse(store.invitations);
+    }
+
+    if (path === `/api/organizations/${organizationSlug}/audit-log` && method === "GET") {
+      const page = Number(url.searchParams.get("page") ?? "1");
+      const pageSize = 10;
+      return new Response(JSON.stringify({
+        data: store.auditEvents.slice((page - 1) * pageSize, page * pageSize),
+        pagination: {
+          page,
+          pageSize,
+          totalItems: store.auditEvents.length,
+          totalPages: Math.max(1, Math.ceil(store.auditEvents.length / pageSize)),
+        },
+      }), { headers: { "Content-Type": "application/json" } });
+    }
+
+    if (path === `/api/organizations/${organizationSlug}/dashboard` && method === "GET") {
+      return jsonResponse({
+        scope: "organization",
+        metrics: { pipelineValueCents: 180000, wonValueCents: 0, activeClients: 1, leads: 1, overdueTasks: 0, dueSoonTasks: 1 },
+        dealStages: [{ stage: "proposal_sent", count: 1, valueCents: 180000 }],
+        upcomingTasks: store.tasks.map((task) => ({ id: task.id, title: task.title, priority: task.priority, dueAt: task.dueAt, company: task.company })),
+        recentActivities: store.activities.map((activity) => ({ id: activity.id, type: activity.type, subject: activity.subject, occurredAt: activity.occurredAt, company: activity.company })),
+      });
     }
 
     if (path === `/api/organizations/${organizationSlug}/companies` && method === "POST") {
@@ -633,7 +696,7 @@ describe("agency CRM authentication", () => {
     expect(screen.getByLabelText("Email")).toHaveValue("owner@atlas-digital.test");
   });
 
-  test("logs in and lands on the protected companies screen", async () => {
+  test("logs in and lands on the protected dashboard", async () => {
     const user = userEvent.setup();
     renderApp("/login");
 
@@ -643,8 +706,8 @@ describe("agency CRM authentication", () => {
     await user.type(screen.getByLabelText("Password"), "AtlasAdmin123!");
     await user.click(screen.getByRole("button", { name: "Sign in" }));
 
-    expect(await screen.findByRole("heading", { name: "Companies" })).toBeInTheDocument();
-    expect(await screen.findByText("Acme Studio")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Workspace overview" })).toBeInTheDocument();
+    expect(await screen.findByText(/Open pipeline/i)).toBeInTheDocument();
   });
 
   test("shows authenticated user info in the CRM shell", async () => {
@@ -655,6 +718,29 @@ describe("agency CRM authentication", () => {
     expect(screen.getByText("Atlas Owner")).toBeInTheDocument();
     expect(screen.getByText("Admin")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Log out" })).toBeInTheDocument();
+  });
+
+  test("shows a role-aware dashboard at the authenticated home route", async () => {
+    installApiMock(createStore({ authSession: demoSession }));
+    renderApp("/");
+
+    expect(await screen.findByRole("heading", { name: "Workspace overview" })).toBeInTheDocument();
+    expect(await screen.findByText(/Open pipeline/i)).toBeInTheDocument();
+    expect(screen.getByText("Send proposal recap")).toBeInTheDocument();
+  });
+
+  test("searches the CRM and links to a matching record", async () => {
+    installApiMock(createStore({ authSession: demoSession }));
+    const user = userEvent.setup();
+    renderApp("/");
+
+    await screen.findByRole("heading", { name: "Workspace overview" });
+    await user.click(screen.getByRole("button", { name: "Search CRM" }));
+    await user.type(screen.getByLabelText("Search companies, contacts, and deals"), "Acme");
+
+    await waitFor(() => {
+      expect(screen.getByRole("dialog")).toHaveTextContent("Acme Studio");
+    });
   });
 
   test("renders the password recovery request screen", async () => {
@@ -791,6 +877,41 @@ describe("agency CRM authentication", () => {
     renderApp("/team");
 
     expect(await screen.findByText("Inactive members")).toBeInTheDocument();
+  });
+
+  test("lets an authenticated user change their password from account settings", async () => {
+    installApiMock(createStore({ authSession: demoSession }));
+    const user = userEvent.setup();
+    renderApp("/settings");
+
+    expect(await screen.findByRole("heading", { name: "Account settings" })).toBeInTheDocument();
+    await user.type(screen.getByLabelText("Current password"), "AtlasAdmin123!");
+    await user.type(screen.getByLabelText("New password"), "ChangedPassword123!");
+    await user.click(screen.getByRole("button", { name: "Update password" }));
+
+    expect(await screen.findByText("Password updated. Other signed-in sessions have been revoked.")).toBeInTheDocument();
+  });
+
+  test("shows the admin audit trail", async () => {
+    const auditEvents = Array.from({ length: 11 }, (_, index) => ({
+      id: `audit-${index + 1}`,
+      action: index === 10 ? "auth.login" : "auth.password_changed",
+      subjectType: "user",
+      subjectId: "user-1",
+      metadata: null,
+      createdAt: new Date().toISOString(),
+      actor: { id: "user-1", firstName: "Atlas", lastName: "Owner", email: "owner@atlas-digital.test" },
+    }));
+    installApiMock(createStore({ authSession: demoSession, auditEvents }));
+    const user = userEvent.setup();
+    renderApp("/audit-log");
+
+    expect(await screen.findByRole("heading", { name: "Audit log" })).toBeInTheDocument();
+    expect((await screen.findAllByText("Password changed")).length).toBeGreaterThan(0);
+    expect(screen.getByText("Page 1 of 2")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Next page" }));
+    expect(await screen.findByText("Page 2 of 2")).toBeInTheDocument();
+    expect((await screen.findAllByText("Signed in")).length).toBeGreaterThan(1);
   });
 
   test("shows a returning member a reactivation confirmation instead of account setup", async () => {

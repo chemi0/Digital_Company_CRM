@@ -7,6 +7,19 @@ type ApiRequestOptions = {
 type ApiPayload<T> = {
   data?: T;
   error?: string;
+  pagination?: Pagination;
+};
+
+export type Pagination = {
+  page: number;
+  pageSize: number;
+  totalItems: number;
+  totalPages: number;
+};
+
+export type PaginatedResult<T> = {
+  items: T[];
+  pagination: Pagination;
 };
 
 export class ApiError extends Error {
@@ -52,7 +65,7 @@ async function refreshAuthSession() {
   return refreshPromise;
 }
 
-export async function requestJson<T>(path: string, init?: RequestInit, options: ApiRequestOptions = {}): Promise<T> {
+async function requestPayload<T>(path: string, init?: RequestInit, options: ApiRequestOptions = {}): Promise<ApiPayload<T>> {
   const response = await fetch(buildUrl(path), {
     credentials: "include",
     headers: {
@@ -66,7 +79,7 @@ export async function requestJson<T>(path: string, init?: RequestInit, options: 
     const refreshed = await refreshAuthSession();
 
     if (refreshed) {
-      return requestJson<T>(path, init, {
+      return requestPayload<T>(path, init, {
         ...options,
         retryOnUnauthorized: false,
       });
@@ -79,5 +92,20 @@ export async function requestJson<T>(path: string, init?: RequestInit, options: 
     throw new ApiError(payload.error ?? "Request failed", response.status);
   }
 
-  return payload.data;
+  return payload;
+}
+
+export async function requestJson<T>(path: string, init?: RequestInit, options: ApiRequestOptions = {}): Promise<T> {
+  const payload = await requestPayload<T>(path, init, options);
+  return payload.data as T;
+}
+
+export async function requestPaginatedJson<T>(path: string, init?: RequestInit, options: ApiRequestOptions = {}): Promise<PaginatedResult<T>> {
+  const payload = await requestPayload<T[]>(path, init, options);
+
+  if (!payload.pagination) {
+    throw new ApiError("Response is missing pagination metadata", 500);
+  }
+
+  return { items: payload.data as T[], pagination: payload.pagination };
 }

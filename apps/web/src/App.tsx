@@ -17,6 +17,9 @@ import type {
   LoginCredentials,
   PasswordResetRequestValues,
   PasswordResetValues,
+  PasswordChangeValues,
+  AuditEvent,
+  DashboardSummary,
 } from "@agency-crm/shared";
 import type { ReactNode } from "react";
 import { useState } from "react";
@@ -31,6 +34,7 @@ import {
   Phone,
   ShieldCheck,
   Sparkles,
+  ScrollText,
   UserRoundCheck,
   Users,
 } from "lucide-react";
@@ -45,7 +49,7 @@ import { CrmShell, SectionCard } from "@/components/crm-shell";
 import { LoginForm } from "@/components/login-form";
 import { ApiError } from "@/lib/api-client";
 import { useAuth } from "@/lib/auth-context";
-import { requestPasswordReset, resetPassword } from "@/lib/auth-api";
+import { changePassword, requestPasswordReset, resetPassword } from "@/lib/auth-api";
 import {
   archiveContact,
   archiveDeal,
@@ -79,6 +83,8 @@ import {
   revokeInvitation,
   sendReactivationInvitation,
   updateTeamMemberRole,
+  listAuditEvents,
+  getDashboard,
 } from "@/lib/crm-api";
 import { cn } from "@/lib/utils";
 
@@ -99,6 +105,8 @@ const queryKeys = {
   team: ["team"] as const,
   invitations: ["invitations"] as const,
   inactiveTeam: ["inactive-team"] as const,
+  auditLog: (page: number) => ["audit-log", page] as const,
+  dashboard: ["dashboard"] as const,
 };
 
 const demoCredentials: LoginCredentials | undefined = import.meta.env.DEV
@@ -116,7 +124,7 @@ function App() {
       <Route path="/reset-password" element={<ResetPasswordPage />} />
       <Route path="/accept-invitation" element={<AcceptInvitationPage />} />
       <Route element={<ProtectedRoute />}>
-        <Route path="/" element={<Navigate to="/companies" replace />} />
+        <Route path="/" element={<DashboardPage />} />
         <Route path="/companies" element={<CompaniesPage />} />
         <Route path="/companies/:companyId" element={<CompanyDetailPage />} />
         <Route path="/contacts" element={<ContactsPage />} />
@@ -125,6 +133,8 @@ function App() {
         <Route path="/deals/:dealId" element={<DealDetailPage />} />
         <Route path="/work" element={<WorkPage />} />
         <Route path="/team" element={<TeamPage />} />
+        <Route path="/settings" element={<AccountSettingsPage />} />
+        <Route path="/audit-log" element={<AuditLogPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
@@ -138,7 +148,7 @@ function LoginPage() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const nextPath = typeof (location.state as { from?: string } | null)?.from === "string"
     ? (location.state as { from: string }).from
-    : "/companies";
+    : "/";
 
   if (isLoading) {
     return <FullPageState title="Checking your session" description="Restoring your CRM access from secure cookies." />;
@@ -253,9 +263,59 @@ function ProtectedRoute() {
   return <Outlet />;
 }
 
+function DashboardPage() {
+  const { session } = useAuth();
+  const dashboardQuery = useQuery({ queryKey: queryKeys.dashboard, queryFn: getDashboard });
+  const dashboard = dashboardQuery.data;
+  const scopeLabel = dashboard?.scope === "personal" ? "Your assigned and owned work" : "Organization-wide performance";
+
+  return (
+    <CrmShell title="Workspace overview" eyebrow="CRM dashboard" actions={<div className="hidden rounded-full border border-sky-200 bg-sky-50 px-4 py-2 text-sm font-medium text-sky-800 md:inline-flex">{scopeLabel}</div>}>
+      <DataState isLoading={dashboardQuery.isLoading} error={dashboardQuery.error} empty={!dashboard} emptyLabel="No dashboard data is available yet">
+        {dashboard ? <>
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+            <Metric label="Open pipeline" value={formatMoney(dashboard.metrics.pipelineValueCents, "EUR")} icon={<CircleDollarSign className="size-4" />} />
+            <Metric label="Won revenue" value={formatMoney(dashboard.metrics.wonValueCents, "EUR")} icon={<Sparkles className="size-4" />} />
+            <Metric label="Active clients" value={String(dashboard.metrics.activeClients)} icon={<Building2 className="size-4" />} />
+            <Metric label="New leads" value={String(dashboard.metrics.leads)} icon={<Users className="size-4" />} />
+            <Metric label="Overdue tasks" value={String(dashboard.metrics.overdueTasks)} icon={<CheckSquare className="size-4" />} />
+            <Metric label="Due in seven days" value={String(dashboard.metrics.dueSoonTasks)} icon={<CalendarDays className="size-4" />} />
+          </div>
+          <div className="grid gap-6 xl:grid-cols-[1.15fr_0.85fr]">
+            <SectionCard title="Pipeline by stage" description={dashboard.scope === "personal" ? "Opportunities you own, grouped by their current stage." : "Every active opportunity, grouped by its current stage."}>
+              {dashboard.dealStages.length ? <div className="grid gap-3">{dashboard.dealStages.map((stage) => <DashboardStageRow key={stage.stage} stage={stage} pipelineValueCents={dashboard.metrics.pipelineValueCents} />)}</div> : <p className="rounded-2xl border border-dashed border-slate-200 px-4 py-5 text-sm text-slate-500">No opportunities have been added yet.</p>}
+            </SectionCard>
+            <SectionCard title="Focus this week" description="Open tasks that need attention, ordered by their due date.">
+              {dashboard.upcomingTasks.length ? <div className="grid gap-3">{dashboard.upcomingTasks.map((task) => <DashboardTaskRow key={task.id} task={task} />)}</div> : <p className="rounded-2xl border border-dashed border-slate-200 px-4 py-5 text-sm text-slate-500">No open tasks are currently in scope.</p>}
+            </SectionCard>
+          </div>
+          <SectionCard title="Recent customer activity" description={session?.membership.role === "sales_rep" ? "The latest activity on companies you own." : "The latest customer interactions across the workspace."}>
+            {dashboard.recentActivities.length ? <div className="grid gap-3">{dashboard.recentActivities.map((activity) => <DashboardActivityRow key={activity.id} activity={activity} />)}</div> : <p className="rounded-2xl border border-dashed border-slate-200 px-4 py-5 text-sm text-slate-500">No customer activity has been logged yet.</p>}
+          </SectionCard>
+        </> : null}
+      </DataState>
+    </CrmShell>
+  );
+}
+
+function DashboardStageRow({ stage, pipelineValueCents }: { stage: DashboardSummary["dealStages"][number]; pipelineValueCents: number }) {
+  const percentage = pipelineValueCents > 0 ? Math.min(100, Math.round((stage.valueCents / pipelineValueCents) * 100)) : 0;
+  return <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4"><div className="flex flex-wrap items-center justify-between gap-3"><DealStagePill stage={stage.stage} /><p className="text-sm font-semibold text-slate-800">{formatMoney(stage.valueCents, "EUR")}</p></div><div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-200"><div className="h-full rounded-full bg-slate-900" style={{ width: `${percentage}%` }} /></div><p className="mt-2 text-xs font-medium text-slate-500">{stage.count} {stage.count === 1 ? "opportunity" : "opportunities"}</p></div>;
+}
+
+function DashboardTaskRow({ task }: { task: DashboardSummary["upcomingTasks"][number] }) {
+  return <Link to="/work" className="grid gap-2 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 transition hover:border-slate-300 hover:bg-white"><div className="flex items-center justify-between gap-3"><p className="font-semibold text-slate-950">{task.title}</p><PriorityPill priority={task.priority} /></div><p className="text-sm text-slate-600">{task.company.name}</p><p className="text-xs font-medium uppercase tracking-[0.16em] text-slate-400">{task.dueAt ? `Due ${formatDate(task.dueAt)}` : "No due date"}</p></Link>;
+}
+
+function DashboardActivityRow({ activity }: { activity: DashboardSummary["recentActivities"][number] }) {
+  return <Link to="/work" className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 transition hover:border-slate-300 hover:bg-white"><div><p className="font-semibold text-slate-950">{activity.subject}</p><p className="mt-1 text-sm text-slate-600">{formatActivityType(activity.type)} - {activity.company.name}</p></div><p className="text-xs font-medium uppercase tracking-[0.16em] text-slate-400">{formatDate(activity.occurredAt)}</p></Link>;
+}
+
 function CompaniesPage() {
   const queryClient = useQueryClient();
   const { session } = useAuth();
+  const [searchText, setSearchText] = useState("");
+  const [statusFilter, setStatusFilter] = useState<"all" | CompanySummary["status"]>("all");
   const canAssignOwner = session?.membership.role !== "sales_rep";
   const companiesQuery = useQuery({
     queryKey: queryKeys.companies,
@@ -274,18 +334,29 @@ function CompaniesPage() {
     },
   });
 
+  const visibleCompanies = (companiesQuery.data ?? []).filter((company) => {
+    const matchesText = `${company.name} ${company.industry ?? ""}`.toLowerCase().includes(searchText.trim().toLowerCase());
+    return matchesText && (statusFilter === "all" || company.status === statusFilter);
+  });
+
   return (
     <CrmShell title="Companies" eyebrow="Accounts">
       <div className="grid gap-6 xl:grid-cols-[1.45fr_0.95fr]">
         <SectionCard title="Company list" description="Browse the companies currently tracked in the CRM.">
+          <div className="mb-5 grid gap-3 md:grid-cols-[1fr_190px]">
+            <input aria-label="Search companies" className="input-field" value={searchText} onChange={(event) => setSearchText(event.target.value)} placeholder="Search by company or industry" />
+            <select aria-label="Filter companies by status" className="input-field" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as typeof statusFilter)}>
+              <option value="all">All statuses</option><option value="lead">Lead</option><option value="active_client">Active client</option><option value="inactive">Inactive</option>
+            </select>
+          </div>
           <DataState
             isLoading={companiesQuery.isLoading}
             error={companiesQuery.error}
-            empty={!companiesQuery.data?.length}
-            emptyLabel="No companies yet"
+            empty={!visibleCompanies.length}
+            emptyLabel={companiesQuery.data?.length ? "No companies match these filters" : "No companies yet"}
           >
             <div className="grid gap-3">
-              {companiesQuery.data?.map((company) => (
+              {visibleCompanies.map((company) => (
                 <CompanyRow key={company.id} company={company} />
               ))}
             </div>
@@ -431,6 +502,8 @@ function CompanyDetailPage() {
 
 function ContactsPage() {
   const queryClient = useQueryClient();
+  const [searchText, setSearchText] = useState("");
+  const [companyFilter, setCompanyFilter] = useState("all");
   const contactsQuery = useQuery({
     queryKey: queryKeys.contacts,
     queryFn: listContacts,
@@ -455,6 +528,11 @@ function ContactsPage() {
     name: company.name,
   }));
 
+  const visibleContacts = (contactsQuery.data ?? []).filter((contact) => {
+    const matchesText = `${contact.firstName} ${contact.lastName} ${contact.email ?? ""} ${contact.jobTitle ?? ""} ${contact.company.name}`.toLowerCase().includes(searchText.trim().toLowerCase());
+    return matchesText && (companyFilter === "all" || contact.companyId === companyFilter);
+  });
+
   return (
     <CrmShell
       title="Contacts"
@@ -468,14 +546,18 @@ function ContactsPage() {
     >
       <div className="grid gap-6 xl:grid-cols-[1.45fr_0.95fr]">
         <SectionCard title="Contact list" description="People linked to existing companies in the current backend.">
+          <div className="mb-5 grid gap-3 md:grid-cols-[1fr_190px]">
+            <input aria-label="Search contacts" className="input-field" value={searchText} onChange={(event) => setSearchText(event.target.value)} placeholder="Search people, email, or role" />
+            <select aria-label="Filter contacts by company" className="input-field" value={companyFilter} onChange={(event) => setCompanyFilter(event.target.value)}><option value="all">All companies</option>{companyOptions.map((company) => <option key={company.id} value={company.id}>{company.name}</option>)}</select>
+          </div>
           <DataState
             isLoading={contactsQuery.isLoading}
             error={contactsQuery.error}
-            empty={!contactsQuery.data?.length}
-            emptyLabel="No contacts yet"
+            empty={!visibleContacts.length}
+            emptyLabel={contactsQuery.data?.length ? "No contacts match these filters" : "No contacts yet"}
           >
             <div className="grid gap-3">
-              {contactsQuery.data?.map((contact) => (
+              {visibleContacts.map((contact) => (
                 <ContactRow key={contact.id} contact={contact} />
               ))}
             </div>
@@ -600,6 +682,8 @@ function DealsPage() {
   const queryClient = useQueryClient();
   const { session } = useAuth();
   const canAssignOwner = session?.membership.role !== "sales_rep";
+  const [searchText, setSearchText] = useState("");
+  const [stageFilter, setStageFilter] = useState<"all" | DealSummary["stage"]>("all");
   const dealsQuery = useQuery({ queryKey: queryKeys.deals, queryFn: listDeals });
   const companiesQuery = useQuery({ queryKey: queryKeys.companies, queryFn: listCompanies });
   const contactsQuery = useQuery({ queryKey: queryKeys.contacts, queryFn: listContacts });
@@ -619,6 +703,10 @@ function DealsPage() {
     id: company.id,
     name: company.name,
   }));
+  const visibleDeals = (dealsQuery.data ?? []).filter((deal) => {
+    const matchesText = `${deal.title} ${deal.company.name} ${deal.source ?? ""}`.toLowerCase().includes(searchText.trim().toLowerCase());
+    return matchesText && (stageFilter === "all" || deal.stage === stageFilter);
+  });
 
   return (
     <CrmShell
@@ -633,14 +721,20 @@ function DealsPage() {
     >
       <div className="grid gap-6 xl:grid-cols-[1.45fr_0.95fr]">
         <SectionCard title="Pipeline" description="Active commercial opportunities available to your role.">
+          <div className="mb-5 grid gap-3 md:grid-cols-[1fr_190px]">
+            <input aria-label="Search deals" className="input-field" value={searchText} onChange={(event) => setSearchText(event.target.value)} placeholder="Search deals, companies, or source" />
+            <select aria-label="Filter deals by stage" className="input-field" value={stageFilter} onChange={(event) => setStageFilter(event.target.value as typeof stageFilter)}>
+              <option value="all">All stages</option><option value="new_lead">New lead</option><option value="contacted">Contacted</option><option value="qualified">Qualified</option><option value="proposal_sent">Proposal sent</option><option value="won">Won</option><option value="lost">Lost</option>
+            </select>
+          </div>
           <DataState
             isLoading={dealsQuery.isLoading}
             error={dealsQuery.error}
-            empty={!dealsQuery.data?.length}
-            emptyLabel="No active deals yet"
+            empty={!visibleDeals.length}
+            emptyLabel={dealsQuery.data?.length ? "No deals match these filters" : "No active deals yet"}
           >
             <div className="grid gap-3">
-              {dealsQuery.data?.map((deal) => <DealRow key={deal.id} deal={deal} />)}
+              {visibleDeals.map((deal) => <DealRow key={deal.id} deal={deal} />)}
             </div>
           </DataState>
         </SectionCard>
@@ -842,6 +936,78 @@ function WorkPage() {
       </div>
     </CrmShell>
   );
+}
+
+function AccountSettingsPage() {
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [updated, setUpdated] = useState(false);
+  const mutation = useMutation({
+    mutationFn: changePassword,
+    onSuccess: () => {
+      setCurrentPassword("");
+      setNewPassword("");
+      setUpdated(true);
+    },
+  });
+  return (
+    <CrmShell title="Account settings" eyebrow="Personal security">
+      <div className="grid gap-6 xl:grid-cols-[1.05fr_0.95fr]">
+        <SectionCard title="Change password" description="Use a unique password with at least 12 characters. Other active sessions will be signed out automatically.">
+          <form
+            className="grid max-w-xl gap-4"
+            onSubmit={(event) => {
+              event.preventDefault();
+              setUpdated(false);
+              mutation.mutate({ currentPassword, newPassword } satisfies PasswordChangeValues);
+            }}
+          >
+            <label className="grid gap-2 text-sm font-medium text-slate-700">
+              <span>Current password</span>
+              <input className="input-field" type="password" autoComplete="current-password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} required />
+            </label>
+            <label className="grid gap-2 text-sm font-medium text-slate-700">
+              <span>New password</span>
+              <input className="input-field" type="password" autoComplete="new-password" minLength={12} value={newPassword} onChange={(event) => setNewPassword(event.target.value)} required />
+            </label>
+            {mutation.error ? <p className="text-sm font-medium text-rose-600">{mutation.error.message}</p> : null}
+            {updated ? <p className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-800">Password updated. Other signed-in sessions have been revoked.</p> : null}
+            <Button type="submit" size="lg" disabled={mutation.isPending}>Update password</Button>
+          </form>
+        </SectionCard>
+        <SectionCard title="Security policy" description="Controls built into this workspace to protect your company data.">
+          <div className="grid gap-3">
+            <FeatureCard title="Tracked sessions" description="Each login is backed by a server-side session that can be revoked immediately." />
+            <FeatureCard title="One-time recovery links" description="Password-reset links expire after one hour and cannot be used twice." />
+            <FeatureCard title="Session containment" description="Changing your password signs out other browsers and devices, but keeps this session available." />
+          </div>
+        </SectionCard>
+      </div>
+    </CrmShell>
+  );
+}
+
+function AuditLogPage() {
+  const { session } = useAuth();
+  const [page, setPage] = useState(1);
+  const auditQuery = useQuery({ queryKey: queryKeys.auditLog(page), queryFn: () => listAuditEvents(page), enabled: session?.membership.role === "admin" });
+
+  if (session?.membership.role !== "admin") return <Navigate to="/companies" replace />;
+
+  return (
+    <CrmShell title="Audit log" eyebrow="Organization security" actions={<div className="hidden rounded-full border border-slate-200 bg-slate-50 px-4 py-2 text-sm font-medium text-slate-600 md:inline-flex"><ScrollText className="mr-2 size-4" />Latest 100 events</div>}>
+      <SectionCard title="Recorded activity" description="An append-only application history of security, access, and CRM changes. Sensitive values such as passwords and tokens are never recorded.">
+        <DataState isLoading={auditQuery.isLoading} error={auditQuery.error} empty={!auditQuery.data?.items.length} emptyLabel="No organization activity has been recorded yet">
+          <div className="grid gap-3">{auditQuery.data?.items.map((event) => <AuditEventRow key={event.id} event={event} />)}</div>
+        </DataState>
+        {auditQuery.data ? <div className="mt-5 flex items-center justify-between gap-3 border-t border-slate-200 pt-5"><Button type="button" variant="outline" size="sm" onClick={() => setPage((currentPage) => Math.max(1, currentPage - 1))} disabled={page === 1 || auditQuery.isFetching}>Previous page</Button><p className="text-sm font-medium text-slate-600">Page {auditQuery.data.pagination.page} of {auditQuery.data.pagination.totalPages}</p><Button type="button" variant="outline" size="sm" onClick={() => setPage((currentPage) => Math.min(auditQuery.data!.pagination.totalPages, currentPage + 1))} disabled={page >= auditQuery.data.pagination.totalPages || auditQuery.isFetching}>Next page</Button></div> : null}
+      </SectionCard>
+    </CrmShell>
+  );
+}
+
+function AuditEventRow({ event }: { event: AuditEvent }) {
+  return <div className="grid gap-3 rounded-[26px] border border-slate-200 bg-slate-50 px-4 py-4 md:grid-cols-[1fr_auto]"><div><p className="font-semibold text-slate-950">{formatAuditAction(event.action)}</p><p className="mt-1 text-sm text-slate-600">{event.actor ? `${event.actor.firstName} ${event.actor.lastName}` : "System"}{event.subjectType ? ` - ${event.subjectType}` : ""}</p></div><p className="text-xs font-medium uppercase tracking-[0.16em] text-slate-400">{formatDate(event.createdAt)}</p></div>;
 }
 
 function TeamPage() {
@@ -1189,6 +1355,36 @@ function formatDate(value: string | Date) {
 
 function formatActivityType(type: ActivitySummary["type"]) {
   return type[0].toUpperCase() + type.slice(1);
+}
+
+function formatAuditAction(action: string) {
+  const labels: Record<string, string> = {
+    "auth.login": "Signed in",
+    "auth.password_changed": "Password changed",
+    "auth.password_reset": "Password reset",
+    "company.created": "Company created",
+    "company.updated": "Company updated",
+    "contact.created": "Contact created",
+    "contact.updated": "Contact updated",
+    "contact.archived": "Contact archived",
+    "deal.created": "Deal created",
+    "deal.updated": "Deal updated",
+    "deal.archived": "Deal archived",
+    "activity.created": "Activity logged",
+    "task.created": "Task created",
+    "task.updated": "Task updated",
+    "task.archived": "Task archived",
+    "team.invitation_sent": "Invitation sent",
+    "team.invitation_revoked": "Invitation revoked",
+    "team.invitation_accepted": "Invitation accepted",
+    "team.member_role_changed": "Member role changed",
+    "team.member_deactivated": "Member deactivated",
+    "team.member_reactivated": "Member reactivated",
+    "team.member_reactivation_confirmed": "Member reactivation confirmed",
+    "team.reactivation_invitation_sent": "Reactivation email sent",
+  };
+
+  return labels[action] ?? action;
 }
 
 function formatUserRole(role: InvitationFormValues["role"]) {

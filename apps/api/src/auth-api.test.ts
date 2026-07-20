@@ -1,7 +1,7 @@
 import bcrypt from "bcrypt";
 import { createHash } from "crypto";
 import request from "supertest";
-import { afterAll, beforeAll, describe, expect, test } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, test } from "vitest";
 import { createApp } from "./app.js";
 import { prisma } from "./lib/prisma.js";
 
@@ -289,4 +289,84 @@ describe("auth API", () => {
     expect(sessionResponse.status).toBe(401);
     expect(repeatResetResponse.status).toBe(400);
   });
+
+  test("changes a password while keeping only the current session active", async () => {
+    const currentSession = request.agent(app);
+    const otherSession = request.agent(app);
+    await currentSession.post("/api/auth/login").send({ email: demoUserEmail, password: demoPassword });
+    await otherSession.post("/api/auth/login").send({ email: demoUserEmail, password: demoPassword });
+
+    const changeResponse = await currentSession
+      .post("/api/auth/change-password")
+      .send({ currentPassword: demoPassword, newPassword: "ChangedPassword123!" });
+    const currentSessionResponse = await currentSession.get("/api/auth/me");
+    const otherSessionResponse = await otherSession.get("/api/auth/me");
+    const oldLoginResponse = await request(app).post("/api/auth/login").send({ email: demoUserEmail, password: demoPassword });
+    const newLoginResponse = await request(app).post("/api/auth/login").send({ email: demoUserEmail, password: "ChangedPassword123!" });
+
+    expect(changeResponse.status).toBe(200);
+    expect(changeResponse.body.data).toEqual({ passwordChanged: true });
+    expect(currentSessionResponse.status).toBe(200);
+    expect(otherSessionResponse.status).toBe(401);
+    expect(oldLoginResponse.status).toBe(401);
+    expect(newLoginResponse.status).toBe(200);
+  });
+
+  test("returns the organization audit trail to an admin", async () => {
+    const agent = request.agent(app);
+    await agent.post("/api/auth/login").send({ email: demoUserEmail, password: demoPassword });
+
+    const response = await agent.get(`/api/organizations/${demoOrgSlug}/audit-log`);
+
+    expect(response.status).toBe(200);
+    expect(response.body.data).toEqual(expect.arrayContaining([
+      expect.objectContaining({ action: "auth.login", actor: expect.objectContaining({ email: demoUserEmail }) }),
+    ]));
+  });
+
+  test("paginates the audit trail in groups of ten events", async () => {
+    const organization = await prisma.organization.upsert({
+      where: { slug: "audit-pagination-test" },
+      update: { archivedAt: null },
+      create: { name: "Audit Pagination Test", slug: "audit-pagination-test" },
+    });
+    const user = await prisma.user.upsert({
+      where: { email: "audit-pagination@example.com" },
+      update: { passwordHash: await bcrypt.hash("AuditPagination123!", 10), isActive: true, archivedAt: null },
+      create: { email: "audit-pagination@example.com", passwordHash: await bcrypt.hash("AuditPagination123!", 10), firstName: "Audit", lastName: "Pagination" },
+    });
+    await prisma.membership.upsert({
+      where: { organizationId_userId: { organizationId: organization.id, userId: user.id } },
+      update: { role: "ADMIN", archivedAt: null },
+      create: { organizationId: organization.id, userId: user.id, role: "ADMIN" },
+    });
+    await prisma.auditEvent.deleteMany({ where: { organizationId: organization.id } });
+    await prisma.auditEvent.createMany({
+      data: Array.from({ length: 11 }, (_, index) => ({
+        organizationId: organization.id,
+        actorUserId: user.id,
+        action: `audit.pagination.${index + 1}`,
+        createdAt: new Date(`2099-01-${String(index + 1).padStart(2, "0")}T00:00:00.000Z`),
+      })),
+    });
+    const agent = request.agent(app);
+    await agent.post("/api/auth/login").send({ email: user.email, password: "AuditPagination123!" });
+
+    const response = await agent.get("/api/organizations/audit-pagination-test/audit-log?page=2");
+
+    expect(response.status).toBe(200);
+    expect(response.body.data).toHaveLength(2);
+    expect(response.body.data[0]).toEqual(expect.objectContaining({ action: "audit.pagination.1" }));
+    expect(response.body.pagination).toEqual({ page: 2, pageSize: 10, totalItems: 12, totalPages: 2 });
+
+    await prisma.authSession.deleteMany({ where: { userId: user.id } });
+    await prisma.membership.deleteMany({ where: { organizationId: organization.id } });
+    await prisma.organization.delete({ where: { id: organization.id } });
+    await prisma.user.delete({ where: { id: user.id } });
+  });
+});
+
+beforeEach(async () => {
+  await ensureDemoAdmin();
+  await prisma.authSession.deleteMany({ where: { user: { email: demoUserEmail } } });
 });

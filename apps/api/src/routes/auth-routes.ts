@@ -18,6 +18,7 @@ import { requireAuth } from "../middleware/auth.js";
 import { prisma } from "../lib/prisma.js";
 import { hashInvitationToken, sendPasswordResetEmail } from "../lib/invitation-email.js";
 import { createPasswordResetToken, hashPasswordResetToken } from "../lib/password-reset.js";
+import { auditEventData, recordAuditEvent } from "../lib/audit-log.js";
 
 const router = Router();
 
@@ -36,6 +37,7 @@ const acceptInvitationSchema = z.object({
 const invitationPreviewSchema = z.object({ token: z.string().min(32) });
 const forgotPasswordSchema = z.object({ email: z.email() });
 const resetPasswordSchema = z.object({ token: z.string().min(32), password: z.string().min(12).max(128) });
+const changePasswordSchema = z.object({ currentPassword: z.string().min(1), newPassword: z.string().min(12).max(128) });
 
 async function buildSessionResponse(userId: string, sessionId: string) {
   const authContext = await loadActiveAuthContextForUser(userId);
@@ -133,6 +135,14 @@ router.post("/api/auth/login", async (request, response) => {
 
   setAuthCookies(response, accessToken, refreshToken);
 
+  await recordAuditEvent({
+    organizationId: authContext.organization.id,
+    actorUserId: user.id,
+    action: "auth.login",
+    subjectType: "user",
+    subjectId: user.id,
+  });
+
   return response.json({
     data: {
       ...authContext.user,
@@ -192,12 +202,48 @@ router.post("/api/auth/reset-password", async (request, response) => {
       await transaction.user.update({ where: { id: resetToken.userId }, data: { passwordHash } });
       await transaction.passwordResetToken.updateMany({ where: { userId: resetToken.userId, usedAt: null }, data: { usedAt: new Date() } });
       await transaction.authSession.updateMany({ where: { userId: resetToken.userId, revokedAt: null }, data: { revokedAt: new Date(), lastUsedAt: new Date() } });
+      const membership = await transaction.membership.findFirst({ where: { userId: resetToken.userId, archivedAt: null, organization: { archivedAt: null } }, select: { organizationId: true } });
+      if (membership) {
+        await transaction.auditEvent.create({ data: auditEventData({ organizationId: membership.organizationId, actorUserId: resetToken.userId, action: "auth.password_reset", subjectType: "user", subjectId: resetToken.userId }) });
+      }
       return true;
     });
     return response.json({ data: { passwordReset: consumed } });
   } catch {
     return response.status(400).json({ error: "This password reset link is invalid, expired, or already used" });
   }
+});
+
+router.post("/api/auth/change-password", requireAuth, async (request, response) => {
+  const parsed = changePasswordSchema.safeParse(request.body);
+  if (!parsed.success) return response.status(400).json({ error: "Invalid password change payload" });
+
+  const { organization, sessionId, userId } = request.auth!;
+  const user = await prisma.user.findUnique({ where: { id: userId }, select: { passwordHash: true } });
+  if (!user || !(await bcrypt.compare(parsed.data.currentPassword, user.passwordHash))) {
+    return response.status(400).json({ error: "Your current password is incorrect" });
+  }
+
+  const passwordHash = await bcrypt.hash(parsed.data.newPassword, 12);
+  await prisma.$transaction(async (transaction) => {
+    await transaction.user.update({ where: { id: userId }, data: { passwordHash } });
+    await transaction.passwordResetToken.updateMany({ where: { userId, usedAt: null }, data: { usedAt: new Date() } });
+    await transaction.authSession.updateMany({
+      where: { userId, id: { not: sessionId }, revokedAt: null },
+      data: { revokedAt: new Date(), lastUsedAt: new Date() },
+    });
+    await transaction.auditEvent.create({
+      data: auditEventData({
+        organizationId: organization.id,
+        actorUserId: userId,
+        action: "auth.password_changed",
+        subjectType: "user",
+        subjectId: userId,
+      }),
+    });
+  });
+
+  return response.json({ data: { passwordChanged: true } });
 });
 
 router.post("/api/auth/accept-invitation", async (request, response) => {
@@ -214,6 +260,7 @@ router.post("/api/auth/accept-invitation", async (request, response) => {
         const restoredMembership = await transaction.membership.update({ where: { id: inactiveMembership.id }, data: { archivedAt: null }, select: { id: true, role: true } });
         const accepted = await transaction.invitation.updateMany({ where: { id: invitation.id, acceptedAt: null, revokedAt: null }, data: { acceptedAt: new Date() } });
         if (accepted.count !== 1) throw new Error("Invitation was already accepted");
+        await transaction.auditEvent.create({ data: auditEventData({ organizationId: invitation.organizationId, actorUserId: existingUser.id, action: "team.member_reactivation_confirmed", subjectType: "membership", subjectId: restoredMembership.id }) });
         return restoredMembership;
       });
       return response.json({ data: { membership: { id: membership.id, role: membership.role.toLowerCase(), reactivated: true } } });
@@ -229,6 +276,7 @@ router.post("/api/auth/accept-invitation", async (request, response) => {
       const createdMembership = await transaction.membership.create({ data: { organizationId: invitation.organizationId, userId: user.id, role: invitation.role }, select: { id: true, role: true } });
       const accepted = await transaction.invitation.updateMany({ where: { id: invitation.id, acceptedAt: null, revokedAt: null }, data: { acceptedAt: new Date() } });
       if (accepted.count !== 1) throw new Error("Invitation was already accepted");
+      await transaction.auditEvent.create({ data: auditEventData({ organizationId: invitation.organizationId, actorUserId: user.id, action: "team.invitation_accepted", subjectType: "membership", subjectId: createdMembership.id }) });
       return createdMembership;
     });
     return response.status(201).json({ data: { membership: { id: membership.id, role: membership.role.toLowerCase() } } });

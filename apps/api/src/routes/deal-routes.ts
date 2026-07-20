@@ -2,6 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { toApiRole } from "../lib/auth-context.js";
 import { prisma } from "../lib/prisma.js";
+import { recordAuditEvent } from "../lib/audit-log.js";
 import { requireAuth, requireOrganizationAccess } from "../middleware/auth.js";
 
 const router = Router();
@@ -375,6 +376,8 @@ router.post("/api/organizations/:organizationSlug/deals", async (request, respon
     },
   });
 
+  await recordAuditEvent({ organizationId: organization.id, actorUserId: request.auth!.userId, action: "deal.created", subjectType: "deal", subjectId: deal.id, metadata: { stage: deal.stage } });
+
   return response.status(201).json({
     data: toDealResponse(deal, {
       company: deal.company,
@@ -486,6 +489,8 @@ router.patch("/api/organizations/:organizationSlug/deals/:dealId", async (reques
     },
   });
 
+  await recordAuditEvent({ organizationId: organization.id, actorUserId: request.auth!.userId, action: "deal.updated", subjectType: "deal", subjectId: deal.id, metadata: { stage: deal.stage } });
+
   return response.json({
     data: toDealResponse(deal, {
       company: deal.company,
@@ -518,6 +523,8 @@ router.delete("/api/organizations/:organizationSlug/deals/:dealId", async (reque
       archivedAt: true,
     },
   });
+
+  await recordAuditEvent({ organizationId: organization.id, actorUserId: request.auth!.userId, action: "deal.archived", subjectType: "deal", subjectId: archivedDeal.id });
 
   return response.json({
     data: {

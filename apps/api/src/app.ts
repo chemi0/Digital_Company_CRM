@@ -8,6 +8,9 @@ import { companyContactRouter } from "./routes/company-contact-routes.js";
 import { dealRouter } from "./routes/deal-routes.js";
 import { workRouter } from "./routes/work-routes.js";
 import { teamRouter } from "./routes/team-routes.js";
+import { auditRouter } from "./routes/audit-routes.js";
+import { dashboardRouter } from "./routes/dashboard-routes.js";
+import { searchRouter } from "./routes/search-routes.js";
 import { env } from "./lib/env.js";
 import { prisma } from "./lib/prisma.js";
 import { requireTrustedOrigin, sensitiveAuthLimiter } from "./middleware/security.js";
@@ -29,11 +32,15 @@ export function createApp() {
   app.use("/api/auth/login", sensitiveAuthLimiter);
   app.use("/api/auth/forgot-password", sensitiveAuthLimiter);
   app.use("/api/auth/reset-password", sensitiveAuthLimiter);
+  app.use("/api/auth/change-password", sensitiveAuthLimiter);
   app.use(authRouter);
   app.use(companyContactRouter);
   app.use(dealRouter);
   app.use(workRouter);
   app.use(teamRouter);
+  app.use(auditRouter);
+  app.use(dashboardRouter);
+  app.use(searchRouter);
 
   app.get("/api/health", async (_request, response) => {
     const [organizations, users, companies, contacts, deals, activities, tasks] = await prisma.$transaction([

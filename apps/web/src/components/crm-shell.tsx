@@ -1,7 +1,8 @@
-import { BriefcaseBusiness, Building2, CheckSquare, ChevronLeft, Handshake, LogOut, Menu, ShieldCheck, Users } from "lucide-react";
+import { BriefcaseBusiness, Building2, CheckSquare, ChevronLeft, Handshake, LayoutDashboard, LogOut, Menu, ScrollText, Settings, ShieldCheck, Users } from "lucide-react";
 import type { PropsWithChildren, ReactNode } from "react";
 import { NavLink } from "react-router-dom";
 import { Button } from "@/components/ui/button";
+import { GlobalSearch } from "@/components/global-search";
 import { useAuth } from "@/lib/auth-context";
 import { cn } from "@/lib/utils";
 
@@ -14,6 +15,11 @@ type CrmShellProps = PropsWithChildren<{
 }>;
 
 const navItems = [
+  {
+    to: "/",
+    label: "Dashboard",
+    icon: LayoutDashboard,
+  },
   {
     to: "/companies",
     label: "Companies",
@@ -40,6 +46,17 @@ const navItems = [
     icon: ShieldCheck,
     leadershipOnly: true,
   },
+  {
+    to: "/audit-log",
+    label: "Audit log",
+    icon: ScrollText,
+    adminOnly: true,
+  },
+  {
+    to: "/settings",
+    label: "Account settings",
+    icon: Settings,
+  },
 ];
 
 export function CrmShell({ title, eyebrow, backTo, backLabel, actions, children }: CrmShellProps) {
@@ -62,7 +79,10 @@ export function CrmShell({ title, eyebrow, backTo, backLabel, actions, children 
           </div>
 
           <nav className="grid gap-2">
-            {navItems.filter((item) => !item.leadershipOnly || session?.membership.role !== "sales_rep").map(({ to, label, icon: Icon }) => (
+            {navItems.filter((item) => {
+              if (item.adminOnly && session?.membership.role !== "admin") return false;
+              return !item.leadershipOnly || session?.membership.role !== "sales_rep";
+            }).map(({ to, label, icon: Icon }) => (
               <NavLink
                 key={to}
                 to={to}
@@ -80,6 +100,7 @@ export function CrmShell({ title, eyebrow, backTo, backLabel, actions, children 
               </NavLink>
             ))}
           </nav>
+          <GlobalSearch />
 
           {session ? (
             <div className="mt-8 rounded-[24px] border border-slate-200 bg-slate-50 p-4">

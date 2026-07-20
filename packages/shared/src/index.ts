@@ -38,6 +38,57 @@ export type PasswordResetValues = {
   password: string;
 };
 
+export type PasswordChangeValues = {
+  currentPassword: string;
+  newPassword: string;
+};
+
+export type AuditEvent = {
+  id: string;
+  action: string;
+  subjectType: string | null;
+  subjectId: string | null;
+  metadata: Record<string, unknown> | null;
+  createdAt: string | Date;
+  actor: {
+    id: string;
+    firstName: string;
+    lastName: string;
+    email: string;
+  } | null;
+};
+
+export type DashboardSummary = {
+  scope: "organization" | "personal";
+  metrics: {
+    pipelineValueCents: number;
+    wonValueCents: number;
+    activeClients: number;
+    leads: number;
+    overdueTasks: number;
+    dueSoonTasks: number;
+  };
+  dealStages: Array<{
+    stage: DealStage;
+    count: number;
+    valueCents: number;
+  }>;
+  upcomingTasks: Array<{
+    id: string;
+    title: string;
+    priority: TaskPriority;
+    dueAt: string | Date | null;
+    company: ContactCompany;
+  }>;
+  recentActivities: Array<{
+    id: string;
+    type: ActivityType;
+    subject: string;
+    occurredAt: string | Date;
+    company: ContactCompany;
+  }>;
+};
+
 export type CompanyOwner = {
   id: string;
   role: UserRole;
@@ -164,6 +215,12 @@ export type DealSummary = {
 };
 
 export type DealDetail = DealSummary;
+
+export type GlobalSearchResults = {
+  companies: Array<Pick<CompanySummary, "id" | "name" | "status">>;
+  contacts: Array<Pick<ContactSummary, "id" | "firstName" | "lastName" | "email" | "company">>;
+  deals: Array<Pick<DealSummary, "id" | "title" | "stage" | "company">>;
+};
 
 export type DealFormValues = {
   companyId: string;
