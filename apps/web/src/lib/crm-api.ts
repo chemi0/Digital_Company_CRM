@@ -34,6 +34,21 @@ export function listCompanies() {
   return requestJson<CompanySummary[]>(buildOrgPath("/companies"));
 }
 
+export type RecordListFilters = { page: number; pageSize?: number; search?: string; status?: CompanySummary["status"]; companyId?: string; stage?: DealSummary["stage"] };
+
+function buildRecordListPath(path: string, filters: RecordListFilters) {
+  const params = new URLSearchParams({ page: String(filters.page), pageSize: String(filters.pageSize ?? 20) });
+  if (filters.search) params.set("search", filters.search);
+  if (filters.status) params.set("status", filters.status);
+  if (filters.companyId) params.set("companyId", filters.companyId);
+  if (filters.stage) params.set("stage", filters.stage);
+  return buildOrgPath(`${path}?${params.toString()}`);
+}
+
+export function listCompaniesPage(filters: RecordListFilters) { return requestPaginatedJson<CompanySummary>(buildRecordListPath("/companies", filters)); }
+export function listContactsPage(filters: RecordListFilters) { return requestPaginatedJson<ContactSummary>(buildRecordListPath("/contacts", filters)); }
+export function listDealsPage(filters: RecordListFilters) { return requestPaginatedJson<DealSummary>(buildRecordListPath("/deals", filters)); }
+
 export function listTeamMembers() {
   return requestJson<CompanyOwner[]>(buildOrgPath("/memberships"));
 }

@@ -11,6 +11,8 @@ const router = Router();
 router.use("/api/organizations/:organizationSlug", requireAuth, requireOrganizationAccess);
 
 const companyStatusSchema = z.enum(["lead", "active_client", "inactive"]);
+const listQuerySchema = z.object({ page: z.coerce.number().int().min(1).default(1), pageSize: z.coerce.number().int().min(1).max(100).default(20), search: z.string().trim().max(100).optional(), status: companyStatusSchema.optional() });
+const contactListQuerySchema = z.object({ page: z.coerce.number().int().min(1).default(1), pageSize: z.coerce.number().int().min(1).max(100).default(20), search: z.string().trim().max(100).optional(), companyId: z.string().trim().min(1).optional() });
 const membershipIdSchema = z.string().min(1);
 
 const createCompanySchema = z.object({
@@ -232,14 +234,24 @@ router.get(
   },
 );
 
+router.get("/api/organizations/:organizationSlug/companies/export", async (request, response) => {
+  const { organization, membership } = request.auth!;
+  const companies = await prisma.company.findMany({ where: { organizationId: organization.id, archivedAt: null, ...companyOwnershipScope(membership.id, membership.role) }, orderBy: { name: "asc" }, select: { name: true, status: true, website: true, industry: true, phone: true } });
+  const escape = (value: string | null) => `"${(value ?? "").replaceAll('"', '""')}"`;
+  const csv = ["Name,Status,Website,Industry,Phone", ...companies.map((company) => [company.name, company.status, company.website, company.industry, company.phone].map(escape).join(","))].join("\n");
+  response.attachment("companies.csv");
+  return response.type("text/csv").send(csv);
+});
+
 router.get("/api/organizations/:organizationSlug/companies", async (request, response) => {
   const { organization, membership } = request.auth!;
+  const parsedQuery = listQuerySchema.safeParse(request.query);
+  if (!parsedQuery.success) return response.status(400).json({ error: "Invalid company list query" });
+  const { page, pageSize, search, status } = parsedQuery.data;
+  const where: Prisma.CompanyWhereInput = { organizationId: organization.id, archivedAt: null, ...companyOwnershipScope(membership.id, membership.role), ...(status ? { status: toPrismaCompanyStatus(status) } : {}), ...(search ? { OR: [{ name: { contains: search, mode: "insensitive" } }, { industry: { contains: search, mode: "insensitive" } }] } : {}) };
   const companies = await prisma.company.findMany({
-    where: {
-      organizationId: organization.id,
-      archivedAt: null,
-      ...companyOwnershipScope(membership.id, membership.role),
-    },
+    where,
+    ...(request.query.page ? { skip: (page - 1) * pageSize, take: pageSize } : {}),
     orderBy: { createdAt: "asc" },
     include: {
       ownerMembership: { select: ownerSelect },
@@ -253,12 +265,13 @@ router.get("/api/organizations/:organizationSlug/companies", async (request, res
     },
   });
 
+  const totalItems = request.query.page ? await prisma.company.count({ where }) : undefined;
   return response.json({
     data: companies.map((company) =>
       toCompanyResponse(company, {
         contactCount: company._count.contacts,
       }),
-    ),
+    ), ...(totalItems === undefined ? {} : { pagination: { page, pageSize, totalItems, totalPages: Math.max(1, Math.ceil(totalItems / pageSize)) } }),
   });
 });
 
@@ -304,20 +317,24 @@ router.get("/api/organizations/:organizationSlug/companies/:companyId", async (r
   });
 });
 
+router.get("/api/organizations/:organizationSlug/contacts/export", async (request, response) => {
+  const { organization, membership } = request.auth!;
+  const contacts = await prisma.contact.findMany({ where: { organizationId: organization.id, archivedAt: null, ...(isLeadershipRole(membership.role) ? {} : { company: { ownerMembershipId: membership.id } }) }, orderBy: [{ lastName: "asc" }, { firstName: "asc" }], include: { company: { select: { name: true } } } });
+  const escape = (value: string | null) => `"${(value ?? "").replaceAll('"', '""')}"`;
+  const csv = ["First name,Last name,Email,Phone,Job title,Company", ...contacts.map((contact) => [contact.firstName, contact.lastName, contact.email, contact.phone, contact.jobTitle, contact.company.name].map(escape).join(","))].join("\n");
+  response.attachment("contacts.csv");
+  return response.type("text/csv").send(csv);
+});
+
 router.get("/api/organizations/:organizationSlug/contacts", async (request, response) => {
   const { organization, membership } = request.auth!;
+  const parsedQuery = contactListQuerySchema.safeParse(request.query);
+  if (!parsedQuery.success) return response.status(400).json({ error: "Invalid contact list query" });
+  const { page, pageSize, search, companyId } = parsedQuery.data;
+  const where: Prisma.ContactWhereInput = { organizationId: organization.id, archivedAt: null, ...(companyId ? { companyId } : {}), ...(isLeadershipRole(membership.role) ? {} : { company: { ownerMembershipId: membership.id } }), ...(search ? { OR: [{ firstName: { contains: search, mode: "insensitive" } }, { lastName: { contains: search, mode: "insensitive" } }, { email: { contains: search, mode: "insensitive" } }, { jobTitle: { contains: search, mode: "insensitive" } }] } : {}) };
   const contacts = await prisma.contact.findMany({
-    where: {
-      organizationId: organization.id,
-      archivedAt: null,
-      ...(isLeadershipRole(membership.role)
-        ? {}
-        : {
-            company: {
-              ownerMembershipId: membership.id,
-            },
-          }),
-    },
+    where,
+    ...(request.query.page ? { skip: (page - 1) * pageSize, take: pageSize } : {}),
     orderBy: { createdAt: "asc" },
     include: {
       company: {
@@ -329,12 +346,13 @@ router.get("/api/organizations/:organizationSlug/contacts", async (request, resp
     },
   });
 
+  const totalItems = request.query.page ? await prisma.contact.count({ where }) : undefined;
   return response.json({
     data: contacts.map((contact) =>
       toContactResponse(contact, {
         company: contact.company,
       }),
-    ),
+    ), ...(totalItems === undefined ? {} : { pagination: { page, pageSize, totalItems, totalPages: Math.max(1, Math.ceil(totalItems / pageSize)) } }),
   });
 });
 

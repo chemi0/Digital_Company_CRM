@@ -190,6 +190,26 @@ describe("company/contact API", () => {
     );
   });
 
+  test("paginates and filters companies for an organization", async () => {
+    const response = await authenticatedAgent.get(
+      `/api/organizations/${testOrgSlug}/companies?page=1&pageSize=1&search=API%20Test`,
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.body.data).toEqual([expect.objectContaining({ name: baseCompanyName })]);
+    expect(response.body.pagination).toEqual(expect.objectContaining({ page: 1, pageSize: 1, totalItems: 1, totalPages: 1 }));
+  });
+
+  test("exports accessible companies as CSV", async () => {
+    const response = await authenticatedAgent.get(
+      `/api/organizations/${testOrgSlug}/companies/export`,
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.headers["content-type"]).toContain("text/csv");
+    expect(response.text).toContain(baseCompanyName);
+  });
+
   test("lists contacts for an organization", async () => {
     const response = await authenticatedAgent.get(
       `/api/organizations/${testOrgSlug}/contacts`,

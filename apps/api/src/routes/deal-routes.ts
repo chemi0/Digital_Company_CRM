@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { Prisma } from "../generated/prisma/client.js";
 import { z } from "zod";
 import { toApiRole } from "../lib/auth-context.js";
 import { prisma } from "../lib/prisma.js";
@@ -10,6 +11,7 @@ const router = Router();
 router.use("/api/organizations/:organizationSlug/deals", requireAuth, requireOrganizationAccess);
 
 const dealStageSchema = z.enum(["new_lead", "contacted", "qualified", "proposal_sent", "won", "lost"]);
+const dealListQuerySchema = z.object({ page: z.coerce.number().int().min(1).default(1), pageSize: z.coerce.number().int().min(1).max(100).default(20), search: z.string().trim().max(100).optional(), stage: dealStageSchema.optional() });
 const identifierSchema = z.string().trim().min(1).max(64);
 const nullableTrimmedText = (maximumLength: number) =>
   z.string().trim().min(1).max(maximumLength).nullable().optional();
@@ -239,14 +241,24 @@ async function validatePrimaryContact(
   return contact?.id ?? null;
 }
 
+router.get("/api/organizations/:organizationSlug/deals/export", async (request, response) => {
+  const { organization, membership } = request.auth!;
+  const deals = await prisma.deal.findMany({ where: { organizationId: organization.id, archivedAt: null, ...dealOwnershipScope(membership.id, membership.role) }, orderBy: { updatedAt: "desc" }, include: { company: { select: { name: true } } } });
+  const escape = (value: string | number | null) => `"${String(value ?? "").replaceAll('"', '""')}"`;
+  const csv = ["Title,Stage,Company,Amount cents,Currency,Source", ...deals.map((deal) => [deal.title, deal.stage, deal.company.name, deal.amountCents, deal.currency, deal.source].map(escape).join(","))].join("\n");
+  response.attachment("deals.csv");
+  return response.type("text/csv").send(csv);
+});
+
 router.get("/api/organizations/:organizationSlug/deals", async (request, response) => {
   const { organization, membership } = request.auth!;
+  const parsedQuery = dealListQuerySchema.safeParse(request.query);
+  if (!parsedQuery.success) return response.status(400).json({ error: "Invalid deal list query" });
+  const { page, pageSize, search, stage } = parsedQuery.data;
+  const where: Prisma.DealWhereInput = { organizationId: organization.id, archivedAt: null, ...dealOwnershipScope(membership.id, membership.role), ...(stage ? { stage: toPrismaDealStage(stage) } : {}), ...(search ? { OR: [{ title: { contains: search, mode: "insensitive" } }, { source: { contains: search, mode: "insensitive" } }, { company: { name: { contains: search, mode: "insensitive" } } }] } : {}) };
   const deals = await prisma.deal.findMany({
-    where: {
-      organizationId: organization.id,
-      archivedAt: null,
-      ...dealOwnershipScope(membership.id, membership.role),
-    },
+    where,
+    ...(request.query.page ? { skip: (page - 1) * pageSize, take: pageSize } : {}),
     orderBy: [{ updatedAt: "desc" }, { createdAt: "desc" }],
     include: {
       ownerMembership: { select: ownerSelect },
@@ -267,13 +279,14 @@ router.get("/api/organizations/:organizationSlug/deals", async (request, respons
     },
   });
 
+  const totalItems = request.query.page ? await prisma.deal.count({ where }) : undefined;
   return response.json({
     data: deals.map((deal) =>
       toDealResponse(deal, {
         company: deal.company,
         primaryContact: deal.primaryContact,
       }),
-    ),
+    ), ...(totalItems === undefined ? {} : { pagination: { page, pageSize, totalItems, totalPages: Math.max(1, Math.ceil(totalItems / pageSize)) } }),
   });
 });
 
